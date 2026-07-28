@@ -31,6 +31,11 @@ for artifact in "${DIST_FILES[@]}"; do
   mcopy -o -i "$image" "$stage/$artifact" "::$artifact"
 done
 
+if [[ "${WEATHER_DEBUG_CFG:-0}" == "1" ]]; then
+  cp "$repo_root/resources/WEATHER.CFG.sample" "$stage/WEATHER.CFG"
+  mcopy -o -i "$image" "$stage/WEATHER.CFG" ::WEATHER.CFG
+fi
+
 listing="$(mdir -b -i "$image" ::)"
 for artifact in "${DIST_FILES[@]}"; do
   if ! grep -q "/$artifact$" <<< "$listing"; then

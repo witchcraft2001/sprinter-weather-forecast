@@ -40,13 +40,21 @@ def check_messages() -> None:
 
 
 def check_source_contract() -> None:
-    source = (ROOT / "src/weather.asm").read_text(encoding="utf-8")
+    source = "\n".join(
+        (ROOT / "src" / name).read_text(encoding="utf-8")
+        for name in ("weather.asm", "config.asm", "transport.asm")
+    )
     for token in (
         'INCLUDE "libman.asm"',
         "UNET_FN_GETCAPS",
         "UNET_FN_STATUS",
         "UNET_FN_NETINIT",
         "UNET_FN_NETDONE",
+        "UNET_FN_CONNECT",
+        "UNET_FN_SEND",
+        "UNET_FN_RECV",
+        "UNET_FN_CLOSE",
+        "UNET_FN_LASTERR",
         "LIBMAN.l_load",
         "LIBMAN_DIAGNOSTICS",
         "LIBMAN.l_load_stage",
@@ -56,7 +64,8 @@ def check_source_contract() -> None:
         "LIBMAN.l_free",
     ):
         require(token in source, f"runtime contract token is missing: {token}")
-    require("UNET_FN_CONNECT" not in source, "stage 1 must not connect to the weather service")
+    require((ROOT / "src" / "config.asm").is_file(), "configuration module is missing")
+    require((ROOT / "src" / "transport.asm").is_file(), "Gopher transport module is missing")
     require("AFNT320" not in source, "stage 1 must not load the graphics library")
     require("ANTONFNT" not in source, "stage 1 must not reference ANTONFNT")
     require(

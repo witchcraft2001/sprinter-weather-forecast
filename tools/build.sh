@@ -20,7 +20,12 @@ mkdir -p "$build_dir/generated"
 cp "$repo_root/extern/esp_net/UNETESP.DLL" "$build_dir/UNETESP.DLL"
 cp "$repo_root/extern/rtl_net/UNETRTL.DLL" "$build_dir/UNETRTL.DLL"
 
-sjasmplus --nologo --fullpath \
+asm_defines=()
+if [[ "${WEATHER_DEBUG_RAW:-0}" == "1" ]]; then
+  asm_defines+=("-DWEATHER_DEBUG_RAW=1")
+fi
+
+sjasmplus --nologo --fullpath "${asm_defines[@]}" \
   -I "$repo_root/extern/esp_net/src/include" \
   -I "$repo_root/extern/libman/libman" \
   -I "$build_dir/generated" \

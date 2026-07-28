@@ -1,9 +1,12 @@
-.PHONY: all build deps test package image submodule-check clean
+.PHONY: all build debug deps test test-z80 package image debug-image submodule-check clean
 
 all: build
 
 build:
 	tools/build.sh
+
+debug:
+	WEATHER_DEBUG_RAW=1 tools/build.sh
 
 deps:
 	tools/check_deps.py
@@ -11,11 +14,19 @@ deps:
 test: build
 	tools/test.sh
 
+test-z80:
+	tools/run_z80_tests.sh
+
 package: build
 	tools/package.sh
 
 image: build
 	tools/image.sh
+
+debug-image:
+	WEATHER_DEBUG_RAW=1 tools/build.sh
+	DIST_NAME=weather-debug WEATHER_DEBUG_CFG=1 tools/image.sh
+	tools/build.sh
 
 submodule-check:
 	tools/check_deps.py --check-clean

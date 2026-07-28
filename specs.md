@@ -20,8 +20,9 @@
 `STATUS`/`NETINIT` → безопасный `NETDONE`/выгрузка» и выводит в штатном
 текстовом режиме DSS результат либо понятную ошибку с диагностикой.
 
-Следующий milestone добавит Gopher-запрос, streaming parser `WX1` и вывод
-нормализованной модели. Эти части не входят в первый milestone.
+Текущий второй milestone добавляет `WEATHER.CFG`, Gopher-запрос и bounded
+приём полного сырого ответа `WX1`. Streaming parser и вывод нормализованной
+модели остаются следующим milestone.
 
 Графический интерфейс отложен. В дальнейшем он будет использовать
 `AFNT320.DLL` и отдельную библиотеку-blitter из Git-сабмодуля
@@ -774,16 +775,16 @@ RTL baseline:
       `README.TXT`.
 - [x] Gate: `make test`, `make package` и `make image` выполняются успешно.
 
-### Этап 2. Конфигурация, UNET и Gopher transport
+### Этап 2. Конфигурация, UNET и Gopher transport — в работе
 
-- [ ] Реализовать поиск и parser необязательного `WEATHER.CFG`.
-- [ ] Реализовать `STATUS`, `NETINIT` и `SETOPT(CANCELKEYS=1)`.
-- [ ] Реализовать `CONNECT`, selector builder и полную проверку `SEND`.
-- [ ] Реализовать bounded `RECV` loop, timeout, `more pending`, `data lost`,
+- [x] Реализовать поиск и parser необязательного `WEATHER.CFG`.
+- [x] Реализовать `STATUS`, `NETINIT` и `SETOPT(CANCELKEYS=1)`.
+- [x] Реализовать `CONNECT`, selector builder и полную проверку `SEND`.
+- [x] Реализовать bounded `RECV` loop, timeout, `more pending`, `data lost`,
       `NERR_CLOSED`, cancel и `LASTERR`.
-- [ ] Подавать принятые bytes в callback parser; временный debug dump разрешён
+- [x] Подавать принятые bytes в callback parser; временный debug dump разрешён
       только compile-time флагом.
-- [ ] Реализовать `CLOSE/NETDONE/l_free` на всех ветках.
+- [x] Реализовать `CLOSE/NETDONE/l_free` на всех ветках.
 - [ ] Зафиксировать реальные binary fixtures `/weather/zx`.
 - [ ] Gate: получить полный raw WX1 через ESP и RTL, корректно завершить
       соединение при success, timeout, cancel и disconnect.

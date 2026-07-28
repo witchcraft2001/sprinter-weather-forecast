@@ -57,7 +57,7 @@ def main() -> int:
     bss_base = symbol_value(symbols, "MAIN.BSS_BASE")
     bss_end = symbol_value(symbols, "MAIN.BSS_END")
     stack_top = symbol_value(symbols, "MAIN.STACK_TOP")
-    if image_end != bss_base or not (0x8100 < image_end <= bss_end < stack_top):
+    if not (0x8100 < bss_base <= bss_end < stack_top == image_end):
         fail("invalid image/BSS/stack ordering")
     if stack != stack_top:
         fail("header stack does not match MAIN.STACK_TOP")

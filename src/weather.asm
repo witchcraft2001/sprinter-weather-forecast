@@ -12,6 +12,7 @@ EXE_LOAD_ADDRESS        EQU 08100h
 
 FLAG_DLL_LOADED         EQU 00000001b
 FLAG_NET_INITIALIZED    EQU 00000010b
+FLAG_CHANNEL_OPEN        EQU 00000100b
 
 BACKEND_NONE            EQU 0
 BACKEND_WIFI            EQU 1
@@ -21,6 +22,7 @@ EXIT_OK                 EQU 0
 EXIT_DLL                EQU 2
 EXIT_NETWORK            EQU 3
 EXIT_CONFIG             EQU 4
+EXIT_TRANSPORT          EQU 5
 
         DEVICE  NOSLOT64K
 
@@ -60,6 +62,21 @@ START:
         CALL    PUTS_LN
         LD      HL, MSG_STAGE
         CALL    PUTS_LN
+
+        CALL    CONFIG_LOAD
+        JP      C, ERROR_CONFIG_FILE
+        LD      HL, (CFG_WARNING_LINE)
+        LD      A, H
+        OR      L
+        JR      Z, .NO_CFG_WARNING
+        LD      HL, MSG_CONFIG_WARNING
+        CALL    PUTS
+        LD      A, (CFG_WARNING_LINE + 1)
+        CALL    PUT_HEX8
+        LD      A, (CFG_WARNING_LINE)
+        CALL    PUT_HEX8
+        CALL    CRLF
+.NO_CFG_WARNING:
 
         CALL    SELECT_BACKEND
         JP      C, ERROR_CONFIG
@@ -107,6 +124,14 @@ START:
         AND     UNET_CAP_TCP
         JP      Z, ERROR_TCP_CAP
 
+        LD      A, UNET_OPT_CANCELKEYS
+        LD      DE, 1
+        LD      B, UNET_FN_SETOPT
+        CALL    CALL_UNET
+        JP      C, ERROR_CALL
+        OR      A
+        JP      NZ, ERROR_UNET_STATUS
+
         ; STATUS(0xff) is intentionally non-hardware: it checks that the
         ; backend-specific environment has been published before NETINIT.
         LD      A, 0FFh
@@ -134,6 +159,29 @@ START:
         CALL    PUTS
         LD      HL, DLL_INFO + 16
         CALL    PUTS_LN
+        LD      HL, MSG_LOADING_WEATHER
+        CALL    PUTS_LN
+
+        CALL    GOPHER_FETCH
+        JP      C, ERROR_TRANSPORT
+
+        ; The ESP backend may still be draining UART data.  Finish the UNET
+        ; session before any potentially slow console output.
+        CALL    CLEANUP
+
+        LD      HL, MSG_RESPONSE_OK
+        CALL    PUTS
+        LD      DE, (RESPONSE_SIZE)
+        CALL    PUT_HEX16
+        CALL    CRLF
+
+        IFDEF   WEATHER_DEBUG_RAW
+        LD      HL, MSG_RAW_RESPONSE
+        CALL    PUTS_LN
+        LD      HL, RESPONSE_BUFFER
+        CALL    PUTS_LN
+        ENDIF
+
         LD      HL, MSG_NEXT
         CALL    PUTS_LN
 
@@ -256,6 +304,21 @@ ERROR_CONFIG:
         LD      B, EXIT_CONFIG
         JP      EXIT_PROGRAM
 
+ERROR_CONFIG_FILE:
+        LD      HL, MSG_CONFIG_ERROR
+        CALL    PUTS
+        LD      A, (CFG_ERROR_LINE + 1)
+        CALL    PUT_HEX8
+        LD      A, (CFG_ERROR_LINE)
+        CALL    PUT_HEX8
+        LD      HL, MSG_CONFIG_CODE
+        CALL    PUTS
+        LD      A, (CFG_ERROR_CODE)
+        CALL    PUT_HEX8
+        CALL    CRLF
+        LD      B, EXIT_CONFIG
+        JP      EXIT_PROGRAM
+
 ERROR_LOAD:
         LD      HL, MSG_LOAD_ERROR
         CALL    PUTS
@@ -365,6 +428,55 @@ ERROR_NETINIT:
         LD      B, EXIT_NETWORK
         JP      EXIT_PROGRAM
 
+ERROR_TRANSPORT:
+        CALL    CLEANUP
+        LD      HL, MSG_TRANSPORT_ERROR
+        CALL    PUTS_LN
+        LD      HL, MSG_TRANSPORT_STAGE
+        CALL    PUTS
+        LD      A, (TRANSPORT_STAGE)
+        CALL    PUT_HEX8
+        LD      HL, MSG_TRANSPORT_CODE
+        CALL    PUTS
+        LD      A, (TRANSPORT_CODE)
+        CALL    PUT_HEX8
+        CALL    CRLF
+        LD      HL, MSG_TRANSPORT_RESPONSE_SIZE
+        CALL    PUTS
+        LD      DE, (TRANSPORT_RESPONSE_SIZE)
+        CALL    PUT_HEX16
+        CALL    CRLF
+        LD      HL, MSG_TRANSPORT_RECV_LENGTH
+        CALL    PUTS
+        LD      DE, (LAST_RECV_LENGTH)
+        CALL    PUT_HEX16
+        CALL    CRLF
+        LD      HL, MSG_TRANSPORT_TAIL
+        CALL    PUTS
+        CALL    PRINT_RESPONSE_TAIL
+        CALL    CRLF
+        LD      A, (TRANSPORT_HAS_DETAIL)
+        OR      A
+        JR      Z, .DETAIL_STATUS
+        LD      HL, MSG_TRANSPORT_DETAIL
+        CALL    PUTS
+        LD      HL, TRANSPORT_DETAIL
+        CALL    PUTS_LN
+.DETAIL_STATUS:
+        LD      HL, MSG_TRANSPORT_DETAIL_STATUS
+        CALL    PUTS
+        LD      A, (TRANSPORT_DETAIL_STATUS)
+        CALL    PUT_HEX8
+        CALL    CRLF
+        IFDEF   WEATHER_DEBUG_RAW
+        LD      HL, MSG_DEBUG_REQUEST
+        CALL    PUTS
+        LD      HL, REQUEST_BUFFER
+        CALL    PUTS_LN
+        ENDIF
+        LD      B, EXIT_TRANSPORT
+        JP      EXIT_PROGRAM
+
 PRINT_CONFIG_HINT:
         LD      A, (BACKEND)
         CP      BACKEND_WIFI
@@ -380,6 +492,9 @@ PRINT_CONFIG_HINT:
         LD      HL, MSG_HINT_RTL
         JP      PUTS_LN
 
+        INCLUDE "config.asm"
+        INCLUDE "transport.asm"
+
 ; ---------------------------------------------------------------------------
 ; Idempotent cleanup and DSS exit.
 ; ---------------------------------------------------------------------------
@@ -394,6 +509,17 @@ EXIT_PROGRAM:
         RET                             ; defensive: DSS EXIT does not return
 
 CLEANUP:
+        LD      A, (STATE_FLAGS)
+        AND     FLAG_CHANNEL_OPEN
+        JR      Z, .NETDONE
+        XOR     A
+        LD      B, UNET_FN_CLOSE
+        CALL    CALL_UNET               ; best effort during unwind
+        LD      A, (STATE_FLAGS)
+        AND     0FFh - FLAG_CHANNEL_OPEN
+        LD      (STATE_FLAGS), A
+
+.NETDONE:
         LD      A, (STATE_FLAGS)
         AND     FLAG_NET_INITIALIZED
         JR      Z, .FREE_DLL
@@ -479,6 +605,40 @@ PUT_NIBBLE:
         DAA
         JP      PUT_CHAR
 
+; Print up to four final response bytes in stream order. This diagnostics-only
+; helper makes a malformed or repeated network payload observable without
+; dumping an unbounded buffer to the text screen.
+PRINT_RESPONSE_TAIL:
+        LD      HL, (RESPONSE_SIZE)
+        LD      A, H
+        OR      L
+        RET     Z
+        LD      DE, 4
+        OR      A
+        SBC     HL, DE
+        JR      NC, .START
+        LD      HL, 0
+.START:
+        LD      DE, RESPONSE_BUFFER
+        ADD     HL, DE
+        LD      DE, (RESPONSE_SIZE)
+        LD      A, D
+        OR      A
+        JR      NZ, .FOUR
+        LD      A, E
+        CP      4
+        JR      NC, .FOUR
+        LD      B, A
+        JR      .LOOP
+.FOUR:
+        LD      B, 4
+.LOOP:
+        LD      A, (HL)
+        CALL    PUT_HEX8
+        INC     HL
+        DJNZ    .LOOP
+        RET
+
 ENV_NET:
         DB      "NET", 0
 VALUE_WIFI:
@@ -504,11 +664,10 @@ INFO_RTL_TAG:
 
         MODULE  MAIN
 
-IMAGE_END       EQU $
-
-; Application BSS is not emitted into the EXE. The header-provided stack lies
-; after it, while all caller-owned UNET buffers remain in WIN2.
-BSS_BASE        EQU IMAGE_END
+; Reserve the complete caller-owned WIN2 workspace in the EXE image. DSS does
+; not have a separate BSS-size header field: memory after the raw image may be
+; reused by another allocation, so receive buffers must be emitted explicitly.
+BSS_BASE        EQU $
 DLL_HANDLE      EQU BSS_BASE
 STATE_FLAGS     EQU DLL_HANDLE + 2
 BACKEND         EQU STATE_FLAGS + 1
@@ -523,19 +682,70 @@ ENV_VALUE       EQU UNET_ABI + 2
 ENV_VALUE_SIZE  EQU 256
 DLL_INFO        EQU ENV_VALUE + ENV_VALUE_SIZE
 DLL_INFO_SIZE   EQU 32
-BSS_END         EQU DLL_INFO + DLL_INFO_SIZE
+CFG_PATH        EQU DLL_INFO + DLL_INFO_SIZE
+CFG_PATH_SIZE   EQU 272
+CFG_FILE_BUFFER EQU CFG_PATH + CFG_PATH_SIZE
+CFG_FILE_MAX    EQU 1024
+CFG_FILE_SIZE   EQU CFG_FILE_BUFFER + CFG_FILE_MAX
+CFG_FILE_HANDLE EQU CFG_FILE_SIZE + 2
+CFG_LINE_BUFFER EQU CFG_FILE_HANDLE + 1
+CFG_LINE_MAX    EQU 255
+CFG_LINE_LEN    EQU CFG_LINE_BUFFER + CFG_LINE_MAX + 1
+CFG_LINE_NO     EQU CFG_LINE_LEN + 1
+CFG_ERROR_LINE  EQU CFG_LINE_NO + 2
+CFG_ERROR_CODE  EQU CFG_ERROR_LINE + 2
+CFG_WARNING_LINE EQU CFG_ERROR_CODE + 1
+CFG_HOST        EQU CFG_WARNING_LINE + 2
+CFG_HOST_SIZE   EQU 129
+CFG_PORT        EQU CFG_HOST + CFG_HOST_SIZE
+CFG_PORT_SIZE   EQU 6
+CFG_PORT_NUMBER EQU CFG_PORT + CFG_PORT_SIZE
+CFG_SELECTOR    EQU CFG_PORT_NUMBER + 2
+CFG_SELECTOR_SIZE EQU 97
+CFG_LOCATION    EQU CFG_SELECTOR + CFG_SELECTOR_SIZE
+CFG_LOCATION_SIZE EQU 97
+REQUEST_BUFFER  EQU CFG_LOCATION + CFG_LOCATION_SIZE
+REQUEST_MAX     EQU 192
+REQUEST_SIZE    EQU REQUEST_BUFFER + REQUEST_MAX + 1
+RECV_BUFFER     EQU REQUEST_SIZE + 2
+RECV_BUFFER_SIZE EQU 512
+RESPONSE_BUFFER EQU RECV_BUFFER + RECV_BUFFER_SIZE
+; A full WX1 seven-day response, including provider attribution, exceeds 2 KiB.
+; Keep it in caller-owned WIN2 RAM so the next stage can parse it after the
+; UNET session has been closed.
+RESPONSE_MAX    EQU 4096
+RESPONSE_SIZE   EQU RESPONSE_BUFFER + RESPONSE_MAX + 1
+RESPONSE_LINE_START EQU RESPONSE_SIZE + 2
+RESPONSE_DONE   EQU RESPONSE_LINE_START + 1
+RESPONSE_TERM_STATE EQU RESPONSE_DONE + 1
+TRANSPORT_STAGE EQU RESPONSE_TERM_STATE + 1
+TRANSPORT_CODE  EQU TRANSPORT_STAGE + 1
+TRANSPORT_HAS_DETAIL EQU TRANSPORT_CODE + 1
+TRANSPORT_DETAIL_STATUS EQU TRANSPORT_HAS_DETAIL + 1
+TRANSPORT_DETAIL EQU TRANSPORT_DETAIL_STATUS + 1
+TRANSPORT_DETAIL_SIZE EQU 128
+LAST_RECV_LENGTH EQU TRANSPORT_DETAIL + TRANSPORT_DETAIL_SIZE
+TRANSPORT_RESPONSE_SIZE EQU LAST_RECV_LENGTH + 2
+BSS_END         EQU TRANSPORT_RESPONSE_SIZE + 2
 BSS_SIZE        EQU BSS_END - BSS_BASE
 
 STACK_SIZE      EQU 0600h
 STACK_BOTTOM    EQU BSS_END
 STACK_TOP       EQU STACK_BOTTOM + STACK_SIZE
 
-        ASSERT  IMAGE_END < 0C000h
         ASSERT  BSS_BASE >= 08100h
         ASSERT  BSS_END < STACK_TOP
+
+        DS      BSS_SIZE, 0
+        DS      STACK_SIZE, 0
+IMAGE_END       EQU $
+
+        ASSERT  IMAGE_END = STACK_TOP
+        ASSERT  IMAGE_END < 0C000h
         ASSERT  STACK_TOP <= 0C000h
         ASSERT  ENV_VALUE + ENV_VALUE_SIZE <= 0C000h
         ASSERT  DLL_INFO + DLL_INFO_SIZE <= 0C000h
+        ASSERT  BSS_END < STACK_TOP
 
         ENDMODULE
 

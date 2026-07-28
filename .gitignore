@@ -1,3 +1,5 @@
 .DS_Store
 build/
 distr/
+AGENTS.md
+CLAUDE.md
