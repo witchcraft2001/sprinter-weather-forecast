@@ -42,7 +42,7 @@ def check_messages() -> None:
 def check_source_contract() -> None:
     source = "\n".join(
         (ROOT / "src" / name).read_text(encoding="utf-8")
-        for name in ("weather.asm", "config.asm", "transport.asm")
+        for name in ("weather.asm", "config.asm", "wx1.asm", "text_ui.asm", "transport.asm")
     )
     for token in (
         'INCLUDE "libman.asm"',
@@ -66,8 +66,21 @@ def check_source_contract() -> None:
         require(token in source, f"runtime contract token is missing: {token}")
     require((ROOT / "src" / "config.asm").is_file(), "configuration module is missing")
     require((ROOT / "src" / "transport.asm").is_file(), "Gopher transport module is missing")
-    require("AFNT320" not in source, "stage 1 must not load the graphics library")
-    require("ANTONFNT" not in source, "stage 1 must not reference ANTONFNT")
+    require((ROOT / "src" / "wx1.asm").is_file(), "WX1 parser module is missing")
+    require((ROOT / "src" / "text_ui.asm").is_file(), "text UI module is missing")
+    for token in (
+        "WX1_FEED",
+        "WX1_EOL_CRLF",
+        "WX1_EOL_CR",
+        "WX1_EOL_LF",
+        "TEXT_RENDER_FORECAST",
+        "ATTEMPT_START",
+        "DSS_WAITKEY",
+    ):
+        require(token in source, f"text MVP contract token is missing: {token}")
+    require("RESPONSE_BUFFER" not in source, "text MVP must not retain the full raw response")
+    require("AFNT320" not in source, "text MVP must not load the graphics library")
+    require("ANTONFNT" not in source, "text MVP must not reference ANTONFNT")
     require(
         "ENV_VALUE_SIZE  EQU 256" in source,
         "ENV_GET buffer must cover DSS's maximum environment value",

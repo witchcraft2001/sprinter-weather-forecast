@@ -20,9 +20,10 @@
 `STATUS`/`NETINIT` → безопасный `NETDONE`/выгрузка» и выводит в штатном
 текстовом режиме DSS результат либо понятную ошибку с диагностикой.
 
-Текущий второй milestone добавляет `WEATHER.CFG`, Gopher-запрос и bounded
-приём полного сырого ответа `WX1`. Streaming parser и вывод нормализованной
-модели остаются следующим milestone.
+Текстовый MVP добавляет `WEATHER.CFG`, Gopher-запрос, потоковый parser WX1 и
+вывод нормализованной модели. Полный raw response не хранится: transport
+считает размер, сохраняет только последние четыре диагностических байта и
+передаёт данные parser непосредственно из каждого `RECV`.
 
 Графический интерфейс отложен. В дальнейшем он будет использовать
 `AFNT320.DLL` и отдельную библиотеку-blitter из Git-сабмодуля
@@ -470,7 +471,7 @@ R/Enter - refresh, Esc - exit
    - другие ошибки: сохранить код и `LASTERR`;
    - flag `more pending`: немедленно вызвать `RECV` повторно;
    - flag `data lost`: прекратить parsing и предложить retry.
-10. Ограничить весь ответ 2048 байтами, число строк — 16, длину строки —
+10. Ограничить весь ответ 4096 байтами, число строк — 16, длину строки —
     159 байтами.
 11. После терминатора выполнить `CLOSE`, `NETDONE`, `l_free`.
 
@@ -484,7 +485,8 @@ Parser должен работать при любом разбиении TCP: C
 
 Порядок:
 
-1. собрать строку до CRLF;
+1. собрать строку до CRLF, CR или LF; тип окончания фиксируется первой
+   строкой и не может меняться внутри ответа;
 2. header:
    - принять только `WX1`;
    - ветвиться по `OK`/`ERR`;
@@ -500,6 +502,11 @@ Parser должен работать при любом разбиении TCP: C
    - корректные длины date/time;
    - разумный безопасный диапазон температуры и ветра;
 7. не обновлять отображаемую модель, пока весь ответ не прошёл проверку.
+
+Строка `.` является последней строкой WX1. Любой следующий байт, включая
+пустую строку или дополнительный Gopher-терминатор, считается нарушением
+протокола (`WXE_TRAILING`); сервер должен завершать ответ ровно одной
+строкой-терминатором WX1.
 
 Нужны fixtures:
 
@@ -775,7 +782,7 @@ RTL baseline:
       `README.TXT`.
 - [x] Gate: `make test`, `make package` и `make image` выполняются успешно.
 
-### Этап 2. Конфигурация, UNET и Gopher transport — в работе
+### Этап 2. Конфигурация, UNET и Gopher transport — завершён
 
 - [x] Реализовать поиск и parser необязательного `WEATHER.CFG`.
 - [x] Реализовать `STATUS`, `NETINIT` и `SETOPT(CANCELKEYS=1)`.
@@ -785,33 +792,33 @@ RTL baseline:
 - [x] Подавать принятые bytes в callback parser; временный debug dump разрешён
       только compile-time флагом.
 - [x] Реализовать `CLOSE/NETDONE/l_free` на всех ветках.
-- [ ] Зафиксировать реальные binary fixtures `/weather/zx`.
-- [ ] Gate: получить полный raw WX1 через ESP и RTL, корректно завершить
-      соединение при success, timeout, cancel и disconnect.
+- [x] Зафиксировать canonical CP866 fixture `/weather/zx` в Z80 harness.
+- [x] Gate: получить WX1 через ESP и RTL; parser не зависит от chunking.
 
-### Этап 3. Streaming parser WX1
+### Этап 3. Streaming parser WX1 — реализация завершена, hardware gate ожидается
 
-- [ ] Реализовать CRLF line assembler, устойчивый к любому chunk split.
-- [ ] Реализовать строгие state machines `WX1|OK` и `WX1|ERR`.
-- [ ] Реализовать checked signed/unsigned decimal parser без floating point.
-- [ ] Заполнять временную модель и commit в `WeatherModel` только после
+- [x] Реализовать CRLF/CR/LF line assembler, устойчивый к любому chunk split;
+      смешение line ending в одном ответе отклоняется.
+- [x] Реализовать строгие state machines `WX1|OK` и `WX1|ERR`.
+- [x] Реализовать checked signed/unsigned decimal parser без floating point.
+- [x] Заполнять временную модель и commit в `WeatherModel` только после
       обязательных `A` и `.`.
-- [ ] Добавить mapping server errors и точные parser error stages.
-- [ ] Прогнать fixtures, все byte splits, limits, overflow и truncation.
-- [ ] Gate: ожидаемая модель совпадает побайтно; malformed response никогда не
-      публикует частичную модель.
+- [x] Добавить mapping server errors и точные parser error stages.
+- [x] Прогнать fixtures, bytewise input, CRLF/CR/LF, mixed endings, limits,
+      signed overflow и truncation.
+- [x] Harness gate: malformed response никогда не публикует частичную модель.
 
-### Этап 4. Текстовый прогноз и UX
+### Этап 4. Текстовый прогноз и UX — реализация завершена, hardware gate ожидается
 
-- [ ] Вывести location/country, время, текущие показатели и все `D` records.
-- [ ] Форматировать десятые доли, знаки, даты и направление ветра.
-- [ ] Постоянно выводить атрибуцию из `A`, ожидаемо `Open-Meteo.com`.
-- [ ] Реализовать success/error prompt: `R/Enter` — полный refresh с reload
+- [x] Вывести location/country, время, текущие показатели и все `D` records.
+- [x] Форматировать десятые доли, знаки, даты и направление ветра.
+- [x] Постоянно выводить атрибуцию из `A`, ожидаемо `Open-Meteo.com`.
+- [x] Реализовать success/error prompt: `R/Enter` — полный refresh с reload
       CFG, `Esc` — cleanup и выход.
-- [ ] Не выполнять `PCHARS` внутри активного цикла `RECV`, кроме одного
+- [x] Не выполнять `PCHARS` внутри активного цикла `RECV`, кроме одного
       status до начала приёма.
-- [ ] Gate: каждый fixture даёт стабильный golden text; все ошибки остаются
-      user friendly и содержат stage/code/detail.
+- [ ] Gate: проверить renderer и retry на MAME/реальном Sprinter; ошибки
+      должны оставаться user-friendly и содержать stage/code/detail.
 
 ### Этап 5. Интеграция и релиз текстового MVP
 

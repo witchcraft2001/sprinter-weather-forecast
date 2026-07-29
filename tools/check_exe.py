@@ -61,13 +61,17 @@ def main() -> int:
         fail("invalid image/BSS/stack ordering")
     if stack != stack_top:
         fail("header stack does not match MAIN.STACK_TOP")
+    headroom = 0xC000 - stack_top
+    if headroom < 0x200:
+        fail(f"WIN2 headroom is only {headroom} bytes, need at least 512")
     if 512 + (image_end - 0x8100) != len(raw):
         fail("EXE file size does not match assembled image end")
 
     print(
         "WEATHER.EXE: OK "
         f"(file={len(raw)} bytes, image={image_end - 0x8100} bytes, "
-        f"BSS={bss_end - bss_base} bytes, stack={stack_top - bss_end} bytes)"
+        f"BSS={bss_end - bss_base} bytes, stack={stack_top - bss_end} bytes, "
+        f"headroom={headroom} bytes)"
     )
     return 0
 

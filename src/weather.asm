@@ -1,9 +1,9 @@
 ; ============================================================================
-; WEATHER.EXE - stage 1 network bootstrap for Sprinter DSS.
+; WEATHER.EXE - text WX1 forecast client for Sprinter DSS.
 ;
 ; Reads NET from the DSS environment, selects a prebuilt UNET backend, loads
-; it through the current libman, validates ABI/capabilities and brings the
-; selected interface up. No weather request is made at this stage.
+; it through current libman, validates ABI/capabilities, receives WX1 and
+; renders a validated text forecast after network cleanup.
 ; ============================================================================
 
 EXE_VERSION             EQU 1
@@ -63,6 +63,8 @@ START:
         LD      HL, MSG_STAGE
         CALL    PUTS_LN
 
+ATTEMPT_START:
+        CALL    ATTEMPT_RESET
         CALL    CONFIG_LOAD
         JP      C, ERROR_CONFIG_FILE
         LD      HL, (CFG_WARNING_LINE)
@@ -169,24 +171,15 @@ START:
         ; session before any potentially slow console output.
         CALL    CLEANUP
 
-        LD      HL, MSG_RESPONSE_OK
-        CALL    PUTS
-        LD      DE, (RESPONSE_SIZE)
-        CALL    PUT_HEX16
-        CALL    CRLF
-
-        IFDEF   WEATHER_DEBUG_RAW
-        LD      HL, MSG_RAW_RESPONSE
-        CALL    PUTS_LN
-        LD      HL, RESPONSE_BUFFER
-        CALL    PUTS_LN
-        ENDIF
-
-        LD      HL, MSG_NEXT
-        CALL    PUTS_LN
+        LD      A, (WX1_RESULT)
+        CP      WX1_SERVICE_ERROR
+        JP      Z, ERROR_SERVICE
+        CP      WX1_OK
+        JP      NZ, ERROR_WX1
+        CALL    TEXT_RENDER_FORECAST
 
         LD      B, EXIT_OK
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 ; ---------------------------------------------------------------------------
 ; Environment/backend selection.
@@ -298,13 +291,15 @@ VALIDATE_DLL_INFO:
 ; Errors.
 ; ---------------------------------------------------------------------------
 ERROR_CONFIG:
+        CALL    CLEANUP
         LD      HL, MSG_NET_NOT_CONFIGURED
         CALL    PUTS_LN
         CALL    PRINT_CONFIG_HINT
         LD      B, EXIT_CONFIG
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 ERROR_CONFIG_FILE:
+        CALL    CLEANUP
         LD      HL, MSG_CONFIG_ERROR
         CALL    PUTS
         LD      A, (CFG_ERROR_LINE + 1)
@@ -317,9 +312,10 @@ ERROR_CONFIG_FILE:
         CALL    PUT_HEX8
         CALL    CRLF
         LD      B, EXIT_CONFIG
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 ERROR_LOAD:
+        CALL    CLEANUP
         LD      HL, MSG_LOAD_ERROR
         CALL    PUTS
         LD      HL, (DLL_NAME_PTR)
@@ -344,44 +340,52 @@ ERROR_LOAD:
         LD      HL, MSG_DLL_HINT
         CALL    PUTS_LN
         LD      B, EXIT_DLL
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 ERROR_INFO:
+        CALL    CLEANUP
         LD      HL, MSG_INFO_ERROR
         CALL    PUTS_LN
         LD      B, EXIT_DLL
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 ERROR_INFO_NAME:
+        CALL    CLEANUP
         LD      HL, MSG_INFO_NAME_ERROR
         CALL    PUTS
         LD      HL, DLL_INFO + 16
         CALL    PUTS_LN
         LD      B, EXIT_DLL
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 ERROR_ABI:
+        CALL    CLEANUP
         LD      HL, MSG_ABI_ERROR
         CALL    PUTS
         LD      DE, (UNET_ABI)
         CALL    PUT_HEX16
         CALL    CRLF
         LD      B, EXIT_DLL
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 ERROR_TCP_CAP:
+        CALL    CLEANUP
         LD      HL, MSG_TCP_ERROR
         CALL    PUTS_LN
         LD      B, EXIT_DLL
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 ERROR_CALL:
+        CALL    CLEANUP
         LD      HL, MSG_CALL_ERROR
         CALL    PUTS_LN
         LD      B, EXIT_DLL
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 ERROR_UNET_STATUS:
+        PUSH    AF
+        CALL    CLEANUP
+        POP     AF
         LD      (LAST_UNET_STATUS), A
         LD      HL, MSG_UNET_ERROR
         CALL    PUTS
@@ -389,9 +393,12 @@ ERROR_UNET_STATUS:
         CALL    PUT_HEX8
         CALL    CRLF
         LD      B, EXIT_NETWORK
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 ERROR_NETINIT:
+        PUSH    AF
+        CALL    CLEANUP
+        POP     AF
         LD      (LAST_UNET_STATUS), A
         CP      NERR_NONET
         JR      Z, .CONFIG
@@ -406,30 +413,40 @@ ERROR_NETINIT:
         CALL    PUT_HEX8
         CALL    CRLF
         LD      B, EXIT_NETWORK
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 .CONFIG:
         LD      HL, MSG_BACKEND_NOT_CONFIGURED
         CALL    PUTS_LN
         CALL    PRINT_CONFIG_HINT
         LD      B, EXIT_CONFIG
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 .HARDWARE:
         LD      HL, MSG_HARDWARE_ERROR
         CALL    PUTS_LN
         CALL    PRINT_CONFIG_HINT
         LD      B, EXIT_DLL
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 .BUSY:
         LD      HL, MSG_BUSY_ERROR
         CALL    PUTS_LN
         LD      B, EXIT_NETWORK
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
 
 ERROR_TRANSPORT:
         CALL    CLEANUP
+        LD      A, (TRANSPORT_STAGE)
+        CP      TST_RESPONSE
+        JR      NZ, .TRANSPORT
+        LD      A, (TRANSPORT_RESPONSE_ERROR)
+        CP      TRESP_PARSER
+        JR      NZ, .TRANSPORT
+        CALL    TEXT_RENDER_WX1_ERROR
+        LD      B, EXIT_TRANSPORT
+        JP      ATTEMPT_FINISH
+.TRANSPORT:
         LD      HL, MSG_TRANSPORT_ERROR
         CALL    PUTS_LN
         LD      HL, MSG_TRANSPORT_STAGE
@@ -475,7 +492,17 @@ ERROR_TRANSPORT:
         CALL    PUTS_LN
         ENDIF
         LD      B, EXIT_TRANSPORT
-        JP      EXIT_PROGRAM
+        JP      ATTEMPT_FINISH
+
+ERROR_SERVICE:
+        CALL    TEXT_RENDER_SERVICE_ERROR
+        LD      B, EXIT_TRANSPORT
+        JP      ATTEMPT_FINISH
+
+ERROR_WX1:
+        CALL    TEXT_RENDER_WX1_ERROR
+        LD      B, EXIT_TRANSPORT
+        JP      ATTEMPT_FINISH
 
 PRINT_CONFIG_HINT:
         LD      A, (BACKEND)
@@ -493,11 +520,53 @@ PRINT_CONFIG_HINT:
         JP      PUTS_LN
 
         INCLUDE "config.asm"
+        INCLUDE "wx1.asm"
+        INCLUDE "text_ui.asm"
         INCLUDE "transport.asm"
 
 ; ---------------------------------------------------------------------------
-; Idempotent cleanup and DSS exit.
+; Attempt lifecycle, idempotent cleanup and DSS exit.
 ; ---------------------------------------------------------------------------
+ATTEMPT_RESET:
+        ; ATTEMPT_FINISH always cleaned the preceding run. Clear only state
+        ; that is deliberately re-discovered from CFG/ENV on every refresh.
+        XOR     A
+        LD      (BACKEND), A
+        LD      (DLL_HANDLE), A
+        LD      (DLL_HANDLE + 1), A
+        LD      (DLL_NAME_PTR), A
+        LD      (DLL_NAME_PTR + 1), A
+        LD      (LAST_UNET_STATUS), A
+        LD      (STATE_FLAGS), A
+        CALL    WX1_RESET
+        RET
+
+; B is the exit category of the completed attempt. Retry reloads both CFG and
+; NET, while Esc returns the category of an unrecovered error (or 0 on success).
+ATTEMPT_FINISH:
+        LD      A, B
+        LD      (LAST_ATTEMPT_EXIT), A
+        CALL    CLEANUP
+        CALL    TEXT_RENDER_PROMPT
+.WAIT:
+        LD      C, DSS_KCLEAR
+        RST     DSS
+        LD      C, DSS_WAITKEY
+        RST     DSS
+        CP      27
+        JR      Z, .EXIT
+        CP      13
+        JP      Z, ATTEMPT_START
+        CP      'R'
+        JP      Z, ATTEMPT_START
+        CP      'r'
+        JP      Z, ATTEMPT_START
+        JR      .WAIT
+.EXIT:
+        LD      A, (LAST_ATTEMPT_EXIT)
+        LD      B, A
+        JP      EXIT_PROGRAM
+
 EXIT_PROGRAM:
         LD      A, B
         LD      (EXIT_CODE), A
@@ -613,24 +682,22 @@ PRINT_RESPONSE_TAIL:
         LD      A, H
         OR      L
         RET     Z
-        LD      DE, 4
-        OR      A
-        SBC     HL, DE
-        JR      NC, .START
-        LD      HL, 0
-.START:
-        LD      DE, RESPONSE_BUFFER
-        ADD     HL, DE
-        LD      DE, (RESPONSE_SIZE)
-        LD      A, D
+        LD      A, H
         OR      A
         JR      NZ, .FOUR
-        LD      A, E
+        LD      A, L
         CP      4
         JR      NC, .FOUR
         LD      B, A
+        LD      A, 4
+        SUB     B
+        LD      E, A
+        LD      D, 0
+        LD      HL, RESPONSE_TAIL
+        ADD     HL, DE
         JR      .LOOP
 .FOUR:
+        LD      HL, RESPONSE_TAIL
         LD      B, 4
 .LOOP:
         LD      A, (HL)
@@ -709,24 +776,54 @@ REQUEST_MAX     EQU 192
 REQUEST_SIZE    EQU REQUEST_BUFFER + REQUEST_MAX + 1
 RECV_BUFFER     EQU REQUEST_SIZE + 2
 RECV_BUFFER_SIZE EQU 512
-RESPONSE_BUFFER EQU RECV_BUFFER + RECV_BUFFER_SIZE
-; A full WX1 seven-day response, including provider attribution, exceeds 2 KiB.
-; Keep it in caller-owned WIN2 RAM so the next stage can parse it after the
-; UNET session has been closed.
+RESPONSE_SIZE   EQU RECV_BUFFER + RECV_BUFFER_SIZE
+RESPONSE_TAIL   EQU RESPONSE_SIZE + 2
+TRANSPORT_INPUT_PTR EQU RESPONSE_TAIL + 4
+TRANSPORT_INPUT_SIZE EQU TRANSPORT_INPUT_PTR + 2
+; The parser limits total received bytes even though it no longer stores the
+; complete response. This leaves room in WIN2 for two validated forecasts.
 RESPONSE_MAX    EQU 4096
-RESPONSE_SIZE   EQU RESPONSE_BUFFER + RESPONSE_MAX + 1
-RESPONSE_LINE_START EQU RESPONSE_SIZE + 2
-RESPONSE_DONE   EQU RESPONSE_LINE_START + 1
-RESPONSE_TERM_STATE EQU RESPONSE_DONE + 1
-TRANSPORT_STAGE EQU RESPONSE_TERM_STATE + 1
+TRANSPORT_STAGE EQU TRANSPORT_INPUT_SIZE + 2
 TRANSPORT_CODE  EQU TRANSPORT_STAGE + 1
-TRANSPORT_HAS_DETAIL EQU TRANSPORT_CODE + 1
+TRANSPORT_RESPONSE_ERROR EQU TRANSPORT_CODE + 1
+TRANSPORT_HAS_DETAIL EQU TRANSPORT_RESPONSE_ERROR + 1
 TRANSPORT_DETAIL_STATUS EQU TRANSPORT_HAS_DETAIL + 1
 TRANSPORT_DETAIL EQU TRANSPORT_DETAIL_STATUS + 1
 TRANSPORT_DETAIL_SIZE EQU 128
 LAST_RECV_LENGTH EQU TRANSPORT_DETAIL + TRANSPORT_DETAIL_SIZE
 TRANSPORT_RESPONSE_SIZE EQU LAST_RECV_LENGTH + 2
-BSS_END         EQU TRANSPORT_RESPONSE_SIZE + 2
+WX1_LINE_BUFFER EQU TRANSPORT_RESPONSE_SIZE + 2
+WX1_LINE_LEN    EQU WX1_LINE_BUFFER + WX1_LINE_MAX + 1
+WX1_STATE       EQU WX1_LINE_LEN + 1
+WX1_LINE_COUNT  EQU WX1_STATE + 1
+WX1_EOL_MODE    EQU WX1_LINE_COUNT + 1
+WX1_PENDING_CR  EQU WX1_EOL_MODE + 1
+WX1_RESULT      EQU WX1_PENDING_CR + 1
+WX1_ERROR_CODE  EQU WX1_RESULT + 1
+WX1_ERROR_LINE  EQU WX1_ERROR_CODE + 1
+WX1_DAYS_LEFT   EQU WX1_ERROR_LINE + 1
+WX1_FIELD_COUNT EQU WX1_DAYS_LEFT + 1
+WX1_FIELD_PTRS  EQU WX1_FIELD_COUNT + 1
+WX1_NEXT_DAY_PTR EQU WX1_FIELD_PTRS + 16
+WX1_SERVICE_CODE EQU WX1_NEXT_DAY_PTR + 2
+WX1_SERVICE_CODE_SIZE EQU 33
+WX1_COPY_LEFT   EQU WX1_SERVICE_CODE + WX1_SERVICE_CODE_SIZE
+WX1_INPUT_BYTE  EQU WX1_COPY_LEFT + 1
+WX1_EOL_CANDIDATE EQU WX1_INPUT_BYTE + 1
+WX1_DIGIT       EQU WX1_EOL_CANDIDATE + 1
+WX1_DIGITS      EQU WX1_DIGIT + 1
+WX1_TMP16       EQU WX1_DIGITS + 1
+WX1_DATE_MONTH  EQU WX1_TMP16 + 2
+WX1_DATE_DAY    EQU WX1_DATE_MONTH + 1
+WX1_DATE_YEAR   EQU WX1_DATE_DAY + 1
+WX1_STAGE_MODEL EQU WX1_DATE_YEAR + 2
+WX1_MODEL       EQU WX1_STAGE_MODEL + WM_MODEL_SIZE
+TEXT_DAYS_LEFT  EQU WX1_MODEL + WM_MODEL_SIZE
+TEXT_DECIMAL    EQU TEXT_DAYS_LEFT + 1
+TEXT_NUMBER_BUFFER EQU TEXT_DECIMAL + 1
+TEXT_NUMBER_BUFFER_SIZE EQU 8
+LAST_ATTEMPT_EXIT EQU TEXT_NUMBER_BUFFER + TEXT_NUMBER_BUFFER_SIZE
+BSS_END         EQU LAST_ATTEMPT_EXIT + 1
 BSS_SIZE        EQU BSS_END - BSS_BASE
 
 STACK_SIZE      EQU 0600h

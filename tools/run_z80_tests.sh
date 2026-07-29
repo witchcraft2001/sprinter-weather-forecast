@@ -15,7 +15,7 @@ dump="$build_dir/t_response.out"
 sjasmplus --nologo --fullpath -I "$repo_root/src" -I "$repo_root/tests/z80" \
   --raw="$bin" "$repo_root/tests/z80/t_response.asm"
 rm -f "$dump"
-"$ticks" -pc 0 -counter 1000000 -output "$dump" "$bin" >/dev/null 2>&1 || true
+"$ticks" -pc 0 -counter 5000000 -output "$dump" "$bin" >/dev/null 2>&1 || true
 [[ -f "$dump" ]] || { echo "FAIL z80 response harness: no memory dump" >&2; exit 1; }
 
 byte_at() { dd if="$dump" bs=1 skip="$1" count=1 2>/dev/null | od -An -tu1 | tr -d ' \n'; }

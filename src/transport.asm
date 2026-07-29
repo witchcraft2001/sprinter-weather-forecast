@@ -19,6 +19,10 @@ TERR_LIBMAN             EQU 086h
 RESP_CONTINUE           EQU 0
 RESP_COMPLETE           EQU 1
 
+TRESP_NONE              EQU 0
+TRESP_PARSER            EQU 1
+TRESP_TRANSPORT         EQU 2
+
 ; Uses the selected, NETINIT-ed UNET DLL and the completed configuration.
 ; Out: CF=0 after a complete Gopher response; CF=1 with transport diagnostic.
 GOPHER_FETCH:
@@ -95,7 +99,7 @@ GOPHER_FETCH:
         CALL    RESPONSE_FEED
         JR      C, .RESPONSE_ERROR
         CP      RESP_COMPLETE
-        JR      Z, .SUCCESS
+        JP      Z, .SUCCESS
         XOR     A
         LD      (TRANSPORT_IDLE_COUNT), A
         JR      .RECV_LOOP
@@ -129,10 +133,8 @@ GOPHER_FETCH:
         JR      C, .RESPONSE_ERROR
 .EOF:
         CALL    RESPONSE_EOF
-        JR      NC, .SUCCESS
-        LD      A, TST_RECV
-        LD      B, TERR_PREMATURE_CLOSE
-        JP      TRANSPORT_FAIL
+        JR      C, .RESPONSE_ERROR
+        JR      .SUCCESS
 .CLOSED_DATA_LOST:
         LD      A, TST_RECV
         LD      B, TERR_DATA_LOST
@@ -166,8 +168,19 @@ GOPHER_FETCH:
         LD      B, TERR_LIBMAN
         JP      TRANSPORT_FAIL
 .RESPONSE_ERROR:
+        LD      A, (TRANSPORT_RESPONSE_ERROR)
+        CP      TRESP_PARSER
+        JR      NZ, .RESPONSE_TRANSPORT_CODE
+        LD      A, (WX1_ERROR_CODE)
+        OR      A
+        JR      NZ, .RESPONSE_CODE_READY
+        LD      A, WXE_PREMATURE_EOF
+        JR      .RESPONSE_CODE_READY
+.RESPONSE_TRANSPORT_CODE:
+        LD      A, TERR_RESPONSE_OVERFLOW
+.RESPONSE_CODE_READY:
+        LD      B, A
         LD      A, TST_RESPONSE
-        LD      B, TERR_RESPONSE_OVERFLOW
         JP      TRANSPORT_FAIL
 .SUCCESS:
         OR      A
@@ -240,9 +253,11 @@ REQUEST_PUT_A:
         RET
 
 TRANSPORT_RESET:
+        CALL    WX1_RESET
         XOR     A
         LD      (TRANSPORT_STAGE), A
         LD      (TRANSPORT_CODE), A
+        LD      (TRANSPORT_RESPONSE_ERROR), A
         LD      (TRANSPORT_HAS_DETAIL), A
         LD      A, 0FFh
         LD      (TRANSPORT_DETAIL_STATUS), A
@@ -252,55 +267,43 @@ TRANSPORT_RESET:
         LD      (LAST_RECV_LENGTH + 1), A
         LD      (RESPONSE_SIZE), A
         LD      (RESPONSE_SIZE + 1), A
-        LD      (RESPONSE_DONE), A
-        LD      (RESPONSE_TERM_STATE), A
-        LD      A, 1
-        LD      (RESPONSE_LINE_START), A
-        XOR     A
-        LD      (RESPONSE_BUFFER), A
+        LD      (RESPONSE_TAIL), A
+        LD      (RESPONSE_TAIL + 1), A
+        LD      (RESPONSE_TAIL + 2), A
+        LD      (RESPONSE_TAIL + 3), A
         LD      (TRANSPORT_DETAIL), A
         RET
 
 ; HL points to received data, BC is its byte count.
-; A=RESP_CONTINUE/RESP_COMPLETE, CF on response-size overflow.
+; A=RESP_CONTINUE/RESP_COMPLETE, CF on response/parser error.
 RESPONSE_FEED:
-.BYTE:
-        LD      A, B
-        OR      C
-        JR      Z, .RESULT
-        LD      A, (RESPONSE_SIZE + 1)
-        CP      HIGH RESPONSE_MAX
-        JR      C, .ROOM
-        JR      NC, .OVERFLOW
-.ROOM:
-        PUSH    HL
-        PUSH    BC
-        LD      DE, (RESPONSE_SIZE)
-        LD      BC, RESPONSE_BUFFER
-        ADD     DE, BC
-        POP     BC
-        POP     HL
-        LD      A, (HL)
-        LD      (DE), A
-        INC     HL
-        DEC     BC
-        PUSH    HL
-        PUSH    BC
+        LD      (TRANSPORT_INPUT_PTR), HL
+        LD      (TRANSPORT_INPUT_SIZE), BC
         LD      HL, (RESPONSE_SIZE)
-        INC     HL
-        LD      (RESPONSE_SIZE), HL
-        LD      DE, RESPONSE_BUFFER
-        ADD     HL, DE
-        XOR     A
-        LD      (HL), A
-        POP     BC
+        ADD     HL, BC
+        JR      C, .OVERFLOW
+        PUSH    HL
+        LD      DE, RESPONSE_MAX
+        OR      A
+        SBC     HL, DE
         POP     HL
-        PUSH    BC
-        CALL    RESPONSE_TRACK_BYTE
-        POP     BC
-        JR      .BYTE
-.RESULT:
-        LD      A, (RESPONSE_DONE)
+        JR      C, .SIZE_OK
+        JR      Z, .SIZE_OK
+        JR      .OVERFLOW
+.SIZE_OK:
+        LD      (RESPONSE_SIZE), HL
+        LD      HL, (TRANSPORT_INPUT_PTR)
+        LD      BC, (TRANSPORT_INPUT_SIZE)
+        CALL    RESPONSE_TAIL_FEED
+        LD      HL, (TRANSPORT_INPUT_PTR)
+        LD      BC, (TRANSPORT_INPUT_SIZE)
+        CALL    WX1_FEED
+        JR      NC, .PARSED
+        LD      A, TRESP_PARSER
+        LD      (TRANSPORT_RESPONSE_ERROR), A
+        SCF
+        RET
+.PARSED:
         OR      A
         JR      Z, .CONTINUE
         LD      A, RESP_COMPLETE
@@ -310,50 +313,36 @@ RESPONSE_FEED:
         XOR     A
         RET
 .OVERFLOW:
+        LD      A, TRESP_TRANSPORT
+        LD      (TRANSPORT_RESPONSE_ERROR), A
         SCF
         RET
 
-; Detect the Gopher terminator in the accumulated stream. This is independent
-; of TCP packet boundaries: the server may split ".\\r\\n" across RECV calls.
-RESPONSE_TRACK_BYTE:
-        PUSH    AF
-        PUSH    BC
-        PUSH    DE
-        PUSH    HL
-        LD      HL, (RESPONSE_SIZE)
-        LD      DE, 3
-        OR      A
-        SBC     HL, DE
-        JR      C, .DONE
-        LD      DE, RESPONSE_BUFFER
-        ADD     HL, DE
+; Keep only the final four bytes for diagnostics; raw WX1 is parsed in flight.
+RESPONSE_TAIL_FEED:
+.BYTE:
+        LD      A, B
+        OR      C
+        RET     Z
         LD      A, (HL)
-        CP      '.'
-        JR      NZ, .DONE
+        LD      D, A
+        LD      A, (RESPONSE_TAIL + 1)
+        LD      (RESPONSE_TAIL), A
+        LD      A, (RESPONSE_TAIL + 2)
+        LD      (RESPONSE_TAIL + 1), A
+        LD      A, (RESPONSE_TAIL + 3)
+        LD      (RESPONSE_TAIL + 2), A
+        LD      A, D
+        LD      (RESPONSE_TAIL + 3), A
         INC     HL
-        LD      A, (HL)
-        CP      13
-        JR      NZ, .DONE
-        INC     HL
-        LD      A, (HL)
-        CP      10
-        JR      NZ, .DONE
-        LD      A, 1
-        LD      (RESPONSE_DONE), A
-.DONE:
-        POP     HL
-        POP     DE
-        POP     BC
-        POP     AF
-        RET
+        DEC     BC
+        JR      .BYTE
 
 RESPONSE_EOF:
-        LD      A, (RESPONSE_DONE)
-        OR      A
-        JR      Z, .BAD
-        OR      A
-        RET
-.BAD:
+        CALL    WX1_EOF
+        RET     NC
+        LD      A, TRESP_PARSER
+        LD      (TRANSPORT_RESPONSE_ERROR), A
         SCF
         RET
 
