@@ -24,7 +24,7 @@ def require(condition: bool, message: str) -> None:
 
 
 def check_runtime_files() -> None:
-    require((BUILD / "WEATHER.EXE").is_file(), "WEATHER.EXE is missing")
+    require((BUILD / "WEATHERC.EXE").is_file(), "WEATHERC.EXE is missing")
     for name, expected_hash in EXPECTED_DLLS.items():
         data = (BUILD / name).read_bytes()
         require(hashlib.sha256(data).hexdigest() == expected_hash, f"{name} changed while staging")
@@ -42,7 +42,7 @@ def check_messages() -> None:
 def check_source_contract() -> None:
     source = "\n".join(
         (ROOT / "src" / name).read_text(encoding="utf-8")
-        for name in ("weather.asm", "config.asm", "wx1.asm", "text_ui.asm", "transport.asm")
+        for name in ("weatherc.asm", "config.asm", "wx1.asm", "text_ui.asm", "transport.asm")
     )
     for token in (
         'INCLUDE "libman.asm"',
@@ -94,7 +94,7 @@ def check_zip_if_present() -> None:
     with zipfile.ZipFile(archive) as package:
         names = sorted(package.namelist())
     require(
-        names == ["README.TXT", "UNETESP.DLL", "UNETRTL.DLL", "WEATHER.EXE"],
+        names == ["README.TXT", "UNETESP.DLL", "UNETRTL.DLL", "WEATHERC.EXE"],
         f"unexpected ZIP contents: {names}",
     )
 

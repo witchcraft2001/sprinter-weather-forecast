@@ -19,7 +19,7 @@ stage="$repo_root/build/image"
 rm -rf "$stage"
 mkdir -p "$stage" "$repo_root/distr"
 
-cp "$repo_root/build/WEATHER.EXE" "$stage/WEATHER.EXE"
+cp "$repo_root/build/WEATHERC.EXE" "$stage/WEATHERC.EXE"
 cp "$repo_root/build/UNETESP.DLL" "$stage/UNETESP.DLL"
 cp "$repo_root/build/UNETRTL.DLL" "$stage/UNETRTL.DLL"
 sed 's/$/'$'\r''/' "$repo_root/resources/README.ru.txt" |

@@ -1,5 +1,5 @@
 ; ============================================================================
-; WEATHER.EXE - text WX1 forecast client for Sprinter DSS.
+; WEATHERC.EXE - console WX1 forecast client for Sprinter DSS.
 ;
 ; Reads NET from the DSS environment, selects a prebuilt UNET backend, loads
 ; it through current libman, validates ABI/capabilities, receives WX1 and
@@ -725,7 +725,7 @@ INFO_RTL_TAG:
 
         ENDMODULE
 
-; The current libman source is compiled into WEATHER.EXE. It uses WIN3 as
+; The current libman source is compiled into WEATHERC.EXE. It uses WIN3 as
 ; scratch, restores it on return and loads the selected DLL into WIN1.
         INCLUDE "libman.asm"
 

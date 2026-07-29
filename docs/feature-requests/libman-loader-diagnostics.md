@@ -12,7 +12,7 @@
 
 ## Наблюдаемая проблема
 
-При запуске `WEATHER.EXE` на реальном Sprinter с `NET=RTL` пользователь видит:
+При запуске `WEATHERC.EXE` на реальном Sprinter с `NET=RTL` пользователь видит:
 
 ```text
 Загрузка: UNETRTL.DLL
@@ -104,7 +104,7 @@ LIBMAN.l_init_status  ; raw A только если DLL function 0 (INIT) вер
    загружает известную L1 DLL в WIN1, вызывает `l_info`, `GETCAPS` и `l_free`.
 3. На реальном Sprinter/MAME harness должен уметь отличить как минимум:
    отсутствующий файл, неверный L1 header, отказ `INIT` и ошибку DSS mapping.
-4. После появления диагностики повторить сценарий `WEATHER.EXE` с
+4. После появления диагностики повторить сценарий `WEATHERC.EXE` с
    `UNETRTL.DLL` и открыть отдельный bug report только с конкретным stage.
 
 ## Граница ответственности

@@ -36,7 +36,7 @@ def main() -> int:
 
     raw = args.exe.read_bytes()
     if len(raw) <= 512:
-        fail("WEATHER.EXE contains no body after its 512-byte header")
+        fail(f"{args.exe.name} contains no body after its 512-byte header")
     if raw[:3] != b"EXE" or raw[3] != 1:
         fail("invalid DSS EXE v1 signature")
 
@@ -68,7 +68,7 @@ def main() -> int:
         fail("EXE file size does not match assembled image end")
 
     print(
-        "WEATHER.EXE: OK "
+        f"{args.exe.name}: OK "
         f"(file={len(raw)} bytes, image={image_end - 0x8100} bytes, "
         f"BSS={bss_end - bss_base} bytes, stack={stack_top - bss_end} bytes, "
         f"headroom={headroom} bytes)"

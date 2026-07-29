@@ -2,7 +2,10 @@
 
 ## 1. Цель и текущий milestone
 
-Итоговая цель — пользовательская программа `WEATHER.EXE` для Sprinter DSS,
+Итоговая цель — графическая пользовательская программа `WEATHER.EXE` для
+Sprinter DSS. Текущий завершённый текстовый клиент выпускается отдельно как
+`WEATHERC.EXE`; он использует тот же сетевой протокол и общий конфиг.
+Графическая программа:
 которая:
 
 - получает текстовый прогноз по Gopher с `go.sprinter.ru:70`, selector
@@ -30,8 +33,9 @@
 `git@github.com:witchcraft2001/sprinter-libs.git`, но текущий milestone эти DLL
 не загружает и от их незавершённого ABI не зависит.
 
-Название исполняемого файла и конфигурации укладывается в формат DSS/FAT 8.3:
-`WEATHER.EXE`, `WEATHER.CFG`.
+Имена исполняемых файлов и конфигурации укладываются в формат DSS/FAT 8.3:
+`WEATHERC.EXE` для console MVP, зарезервированный `WEATHER.EXE` для graphics и
+общий `WEATHER.CFG`.
 
 ## 2. Границы milestones
 
@@ -203,7 +207,7 @@ E|GEO_UNAVAILABLE
 
 Приложение передаёт `LIBMAN.l_load` короткое имя DLL. Libman сам:
 
-1. получает каталог `WEATHER.EXE` через DSS `APPINFO #47`;
+1. получает каталог запущенного EXE через DSS `APPINFO #47`;
 2. пробует `<exe-dir>\<name>.DLL`;
 3. при ошибке открытия пробует имя относительно текущего каталога.
 
@@ -315,7 +319,8 @@ Makefile
 README.md
 specs.md
 src/
-  weather.asm           EXE header, ENV, UNET bootstrap, cleanup и UX
+  weatherc.asm          console EXE header, ENV, UNET bootstrap, cleanup и UX
+  weather.asm           будущий graphics client (пока отсутствует)
 resources/
   messages.json         UTF-8 каталог строк для генерации CP866
   README.ru.txt         UTF-8 источник README.TXT
@@ -660,10 +665,11 @@ stage/code/detail; секретов в diagnostic output нет.
 Makefile:
 
 ```text
-make / make build   проверить DLL, сгенерировать CP866 и собрать WEATHER.EXE
+make / make build   проверить DLL, сгенерировать CP866 и собрать WEATHERC.EXE
+make weatherc       явная цель console MVP (то же, что make build)
 make deps           проверить сабмодули, UNET ABI и готовые DLL
 make test           dependency, source-contract и EXE checks
-make package        WEATHER.EXE + две UNET DLL + README.TXT в ZIP
+make package        WEATHERC.EXE + две UNET DLL + README.TXT в ZIP
 make image          тестовый FAT12 1,44 МБ для Sprinter/MAME
 make clean          удалить только generated build/distr
 make submodule-check проверить ревизии и чистоту всех сабмодулей
@@ -671,7 +677,7 @@ make submodule-check проверить ревизии и чистоту все�
 
 `make package` включает:
 
-- `WEATHER.EXE`;
+- `WEATHERC.EXE`;
 - `UNETESP.DLL`;
 - `UNETRTL.DLL`;
 - краткий `README.TXT` в CP866/CRLF.
@@ -744,7 +750,7 @@ RTL baseline:
 
 ### 13.4. Критерии готовности текстового MVP
 
-- один и тот же `WEATHER.EXE` работает с ESP и RTL;
+- один и тот же `WEATHERC.EXE` работает с ESP и RTL;
 - сервер можно сменить только правкой `WEATHER.CFG`;
 - запрос является Gopher selector, HTTP-кода в программе нет;
 - все валидные WX1 fields разбираются независимо от TCP chunking;
@@ -768,7 +774,7 @@ RTL baseline:
 - [x] Интегрировать актуальный `libman/libman.asm` с `LIBMAN_MAX_LIBS=1`.
 - [x] Добавить Makefile: `deps`, `build`, `test`, `package`, `image`,
       `submodule-check`, `clean`.
-- [x] Собрать `WEATHER.EXE` с DSS EXE v1 header, `ORG 0x8100`,
+- [x] Собрать `WEATHERC.EXE` с DSS EXE v1 header, `ORG 0x8100`,
       BSS/stack assertions и CP866-сообщениями.
 - [x] Реализовать `ENV_GET("NET")` и точный выбор
       `UNETESP.DLL`/`UNETRTL.DLL`.
@@ -778,7 +784,7 @@ RTL baseline:
       `NETUP`/`NETCFG -i`/`IFUP`.
 - [x] Проверять закреплённые коммиты, хеши DLL, L1-структуру, общий UNET ABI,
       EXE header, memory map и состав дистрибутива.
-- [x] Формировать плоский ZIP и FAT12-образ из `WEATHER.EXE`, двух DLL и
+- [x] Формировать плоский ZIP и FAT12-образ из `WEATHERC.EXE`, двух DLL и
       `README.TXT`.
 - [x] Gate: `make test`, `make package` и `make image` выполняются успешно.
 

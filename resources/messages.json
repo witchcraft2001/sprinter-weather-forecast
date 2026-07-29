@@ -1,6 +1,6 @@
 {
   "MSG_CRLF": "\r\n",
-  "MSG_BANNER": "Weather Forecast для Sprinter DSS",
+  "MSG_BANNER": "Weather Forecast Console для Sprinter DSS",
   "MSG_STAGE": "Получение и разбор WX1 прогноза.",
   "MSG_BACKEND_WIFI": "Сетевой backend: ESP/Wi-Fi.",
   "MSG_BACKEND_RTL": "Сетевой backend: RTL8019A.",
@@ -19,7 +19,7 @@
   "MSG_DSS_CODE": ", код DSS: 0x",
   "MSG_LOAD_STAGE": ", этап: 0x",
   "MSG_INIT_STATUS": ", INIT: 0x",
-  "MSG_DLL_HINT": "Положите UNET DLL рядом с WEATHER.EXE.",
+  "MSG_DLL_HINT": "Положите UNET DLL рядом с WEATHERC.EXE.",
   "MSG_INFO_ERROR": "Ошибка: libman не смог прочитать информацию DLL.",
   "MSG_INFO_NAME_ERROR": "Ошибка: загружена DLL другого backend: ",
   "MSG_ABI_ERROR": "Ошибка: несовместимый UNET ABI 0x",

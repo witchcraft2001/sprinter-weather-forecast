@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 build_dir="$repo_root/build"
+console_name="WEATHERC"
 
 if ! command -v sjasmplus >/dev/null 2>&1; then
   echo "Error: sjasmplus is not installed or not in PATH" >&2
@@ -29,11 +30,11 @@ sjasmplus --nologo --fullpath "${asm_defines[@]}" \
   -I "$repo_root/extern/esp_net/src/include" \
   -I "$repo_root/extern/libman/libman" \
   -I "$build_dir/generated" \
-  --lst="$build_dir/WEATHER.lst" \
-  --sym="$build_dir/WEATHER.sym" \
-  --raw="$build_dir/WEATHER.EXE" \
-  "$repo_root/src/weather.asm"
+  --lst="$build_dir/$console_name.lst" \
+  --sym="$build_dir/$console_name.sym" \
+  --raw="$build_dir/$console_name.EXE" \
+  "$repo_root/src/weatherc.asm"
 
 "$script_dir/check_exe.py" \
-  "$build_dir/WEATHER.EXE" \
-  "$build_dir/WEATHER.sym"
+  "$build_dir/$console_name.EXE" \
+  "$build_dir/$console_name.sym"

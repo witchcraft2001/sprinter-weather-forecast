@@ -1,4 +1,4 @@
-WEATHER.EXE - Weather Forecast для Sprinter DSS
+WEATHERC.EXE - консольный Weather Forecast для Sprinter DSS
 
 Программа получает прогноз WX1 через Gopher, показывает текущие условия и
 семь дневных записей в текстовом режиме DSS.
@@ -9,7 +9,7 @@ R или Enter обновляет прогноз с повторным чтен�
 
 Все четыре файла должны находиться в одном каталоге:
 
-  WEATHER.EXE
+  WEATHERC.EXE
   UNETESP.DLL
   UNETRTL.DLL
   README.TXT
