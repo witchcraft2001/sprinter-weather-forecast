@@ -21,7 +21,10 @@ archive="$repo_root/distr/$DIST_NAME.zip"
 rm -rf "$package_root"
 mkdir -p "$package_root" "$repo_root/distr"
 
+cp "$repo_root/build/WEATHER.EXE" "$package_root/WEATHER.EXE"
 cp "$repo_root/build/WEATHERC.EXE" "$package_root/WEATHERC.EXE"
+cp "$repo_root/build/AFNT320.DLL" "$package_root/AFNT320.DLL"
+cp "$repo_root/build/GFX320.DLL" "$package_root/GFX320.DLL"
 cp "$repo_root/build/UNETESP.DLL" "$package_root/UNETESP.DLL"
 cp "$repo_root/build/UNETRTL.DLL" "$package_root/UNETRTL.DLL"
 sed 's/$/'$'\r''/' "$repo_root/resources/README.ru.txt" |

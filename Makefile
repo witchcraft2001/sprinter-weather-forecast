@@ -1,11 +1,14 @@
-.PHONY: all build weatherc console debug deps test test-z80 package image debug-image submodule-check clean
+.PHONY: all build weather weatherc console debug deps test test-z80 package image debug-image submodule-check clean
 
-all: weatherc
+all: build
 
-build: weatherc
+build: weather weatherc
+
+weather:
+	tools/build.sh weather
 
 weatherc:
-	tools/build.sh
+	tools/build.sh weatherc
 
 console: weatherc
 

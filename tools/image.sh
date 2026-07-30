@@ -19,7 +19,10 @@ stage="$repo_root/build/image"
 rm -rf "$stage"
 mkdir -p "$stage" "$repo_root/distr"
 
+cp "$repo_root/build/WEATHER.EXE" "$stage/WEATHER.EXE"
 cp "$repo_root/build/WEATHERC.EXE" "$stage/WEATHERC.EXE"
+cp "$repo_root/build/AFNT320.DLL" "$stage/AFNT320.DLL"
+cp "$repo_root/build/GFX320.DLL" "$stage/GFX320.DLL"
 cp "$repo_root/build/UNETESP.DLL" "$stage/UNETESP.DLL"
 cp "$repo_root/build/UNETRTL.DLL" "$stage/UNETRTL.DLL"
 sed 's/$/'$'\r''/' "$repo_root/resources/README.ru.txt" |
@@ -34,6 +37,13 @@ done
 if [[ "${WEATHER_DEBUG_CFG:-0}" == "1" ]]; then
   cp "$repo_root/resources/WEATHER.CFG.sample" "$stage/WEATHER.CFG"
   mcopy -o -i "$image" "$stage/WEATHER.CFG" ::WEATHER.CFG
+  # GFX320's own prebuilt reference consumer.  It enters video mode #81 exactly
+  # as WEATHER.EXE does, but as a plain WIN2 executable with no PRELOAD, so
+  # running it separates "this machine cannot enter #81 at all" from "our
+  # WIN1-resident PRELOAD context is what makes the switch fatal".  Debug image
+  # only: the stable artifact's contents are fixed.
+  cp "$repo_root/extern/sprinter-libs/gfx320/GFX320.EXE" "$stage/GFXTEST.EXE"
+  mcopy -o -i "$image" "$stage/GFXTEST.EXE" ::GFXTEST.EXE
 fi
 
 listing="$(mdir -b -i "$image" ::)"

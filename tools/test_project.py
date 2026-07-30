@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import struct
 import zipfile
 
 
@@ -24,6 +25,7 @@ def require(condition: bool, message: str) -> None:
 
 
 def check_runtime_files() -> None:
+    require((BUILD / "WEATHER.EXE").is_file(), "WEATHER.EXE is missing")
     require((BUILD / "WEATHERC.EXE").is_file(), "WEATHERC.EXE is missing")
     for name, expected_hash in EXPECTED_DLLS.items():
         data = (BUILD / name).read_bytes()
@@ -36,14 +38,20 @@ def check_messages() -> None:
     for label, value in catalogue.items():
         require(f"{label}:" in generated, f"generated message {label} is missing")
         value.encode("cp866")
-    require("AFNT320" not in generated, "stage 1 must not load AFNT320")
 
 
 def check_source_contract() -> None:
-    source = "\n".join(
+    weather_source = (ROOT / "src" / "weatherc.asm").read_text(encoding="utf-8")
+    graphics_ui_source = (ROOT / "src" / "graphics_ui.asm").read_text(encoding="utf-8")
+    console_source = "\n".join(
         (ROOT / "src" / name).read_text(encoding="utf-8")
         for name in ("weatherc.asm", "config.asm", "wx1.asm", "text_ui.asm", "transport.asm")
     )
+    graphics_source = "\n".join(
+        (ROOT / "src" / name).read_text(encoding="utf-8")
+        for name in ("weather.asm", "graphics_ui.asm")
+    )
+    source = console_source + "\n" + graphics_source
     for token in (
         'INCLUDE "libman.asm"',
         "UNET_FN_GETCAPS",
@@ -79,12 +87,187 @@ def check_source_contract() -> None:
     ):
         require(token in source, f"text MVP contract token is missing: {token}")
     require("RESPONSE_BUFFER" not in source, "text MVP must not retain the full raw response")
-    require("AFNT320" not in source, "text MVP must not load the graphics library")
-    require("ANTONFNT" not in source, "text MVP must not reference ANTONFNT")
+    require("AFNT320.DLL" in graphics_source, "graphics target must load AFNT320")
+    require("GFX320.DLL" in graphics_source, "graphics target must load GFX320")
+    # Compression is deliberately out of the build path for now.  Assert it is
+    # fully out rather than half out: a stale INCLUDE or a leftover call would
+    # reintroduce the depacker's DI without its staging.
+    require(
+        "HRUST" not in graphics_source,
+        "resources ship uncompressed; the depacker must stay out of the client",
+    )
+    require(
+        'INCLUDE "hrust_depack.asm"' not in weather_source,
+        "hrust_depack.asm must not be assembled while resources are uncompressed",
+    )
+    require(
+        (ROOT / "src" / "hrust_depack.asm").is_file()
+        and (ROOT / "tests" / "z80" / "t_hrust.asm").is_file(),
+        "keep the depacker and its harness in the tree for when compression returns",
+    )
+    require(
+        weather_source.index("CALL    GRAPHICS_STAGE_ASSETS")
+        < weather_source.index("ATTEMPT_START:"),
+        "PRELOAD resources must be staged before the first network attempt",
+    )
+    require(
+        graphics_ui_source.index("CALL    GRAPHICS_CLOSE_PRIMARY")
+        < graphics_ui_source.index("GRAPHICS_BOOT:"),
+        "the PRELOAD EXE must be closed before deferred decompression/network use",
+    )
+    close_primary = graphics_ui_source[
+        graphics_ui_source.index("GRAPHICS_CLOSE_PRIMARY:"):
+        graphics_ui_source.index("GRAPHICS_BOOT_ERROR:")
+    ]
+    require(
+        "CP      0FFh" in close_primary and "DSS_CLOSE_FILE" in close_primary,
+        "DSS file handle 0 is valid; PRELOAD close must use 0xff as its sentinel",
+    )
+    # Estex-DSS SETWIN loads the slot port number into H and passes the pair
+    # through BIOS GetMemPage, so it returns with HL and DE destroyed (libman
+    # guards its own SETWIN3 the same way).  The read destination must therefore
+    # be built after the window is selected, not carried across the call.
+    read_loop = graphics_ui_source[
+        graphics_ui_source.index(".READ_PAGE:"):
+        graphics_ui_source.index("GRAPHICS_BOOT:")
+    ]
+    require(
+        read_loop.index("DSS_SETWIN3") < read_loop.index("LD      HL, 0C000h"),
+        "DSS SETWIN destroys HL/DE: select the window before building the "
+        "read destination",
+    )
+    # A truncated read shows up neither in carry nor in the status byte: DSS
+    # compares position+size against the file size with SBC and treats "equal"
+    # as an overrun, so a read ending exactly at EOF reports #FF with every
+    # byte delivered - which the last resource page always does (Estex-DSS
+    # API/Read.asm, .TEST_SIZE).  The returned byte count in DE is the only
+    # sound check.
+    staging = graphics_ui_source[
+        graphics_ui_source.index("GRAPHICS_STAGE_ASSETS:"):
+        graphics_ui_source.index("GRAPHICS_BOOT:")
+    ]
+    reads = staging.split("LD      C, DSS_READ_FILE\n        RST     DSS\n")
+    require(len(reads) == 3, "staging is expected to issue exactly two file reads")
+    for epilogue in reads[1:]:
+        code = [
+            line.strip() for line in epilogue.splitlines()
+            if line.strip() and not line.strip().startswith(";")
+        ]
+        window = code[:5]           # carry test, count, OR A, SBC, its branch
+        require(
+            any(line.startswith(("JR      C,", "JP      C,")) for line in window)
+            and any(line.startswith("SBC     HL, DE") for line in window),
+            "every DSS_READ_FILE in staging must compare the byte count DSS "
+            "returns in DE; carry and the status byte both miss a short read",
+        )
+        require(
+            not any(line.startswith("OR      A") and window[window.index(line) + 1:]
+                    and not window[window.index(line) + 1].startswith("SBC     HL, DE")
+                    for line in window),
+            "the status byte is #FF for a legitimate exactly-at-EOF read and "
+            "must not be branched on",
+        )
+    require(
+        "LD      H, 0\n" not in graphics_ui_source,
+        "generic DSS SETWIN treats H=0 as an error and substitutes WIN1, "
+        "which pages the running program out; select a window explicitly",
+    )
+    # BIOS EMM_FN5 needs a 256-byte destination, so the physical page list is
+    # collected in the borrowed config buffer and consumed by the very next
+    # call.  Nothing may run between the producer and the consumer.
+    require(
+        "ASSET_PHYSICAL_PAGES" not in graphics_source + weather_source,
+        "EMM_FN5 must not write into a short dedicated field: it overruns into "
+        "GRAPHICS_SAVED_WIN0/WIN2/WIN3 and corrupts the page ports",
+    )
+    require(
+        graphics_ui_source.index("CALL    GRAPHICS_BOOT")
+        < graphics_ui_source.index("CALL    GRAPHICS_LOAD_LIBRARIES")
+        < graphics_ui_source.index("CALL    GRAPHICS_DRAW\n"),
+        "the borrowed page-list buffer is only valid from GRAPHICS_BOOT until "
+        "GRAPHICS_LOAD_LIBRARIES consumes it",
+    )
+    # libman returns a table index in L with H forced to 0, so handle 0 belongs
+    # to the first library loaded.  Testing the handle for zero reloads GFX320
+    # on every refresh and leaks a table slot plus a two-page block each time.
+    for token in ("LD      A, (GFX_HANDLE)", "LD      A, (AFNT_HANDLE)"):
+        require(
+            token not in graphics_ui_source,
+            "libman handle 0 is valid; gate DLL loading on GRAPHICS_LIBS_LOADED "
+            f"rather than testing the handle ({token})",
+        )
+    require(
+        "GRAPHICS_LIBS_LOADED" in graphics_ui_source + weather_source,
+        "the DLL pair needs a load flag distinct from the handle values",
+    )
+    # Progress markers go to the screen because every variable this program owns
+    # lives in WIN1, and the paging failure under investigation is WIN1 itself
+    # losing the program; a marker in BSS cannot outlive that event.
+    require(
+        "DSS_PUTCHAR" in graphics_ui_source,
+        "graphics stage markers must reach the text screen, not a WIN1 variable",
+    )
+    load_libraries = graphics_ui_source[
+        graphics_ui_source.index("GRAPHICS_LOAD_LIBRARIES:"):
+        graphics_ui_source.index("GRAPHICS_DRAW:")
+    ]
+    require(
+        load_libraries.count("CALL    GRAPHICS_MARK") == 4,
+        "the DLL loader must mark each of its four stages",
+    )
+    # Nothing of this program may live in WIN1.  DSS's SETVMOD reaches BIOS
+    # WIN_COPY, which maps video page #50 over WIN1 for the duration of the
+    # text-screen save while keeping the displaced page number on the CALLER's
+    # stack (FUNC_LOW_PRINT.ASM:1506-1556).  With the stack in WIN1 that pops
+    # back a byte of video memory and pushes it into the WIN1 page port, which
+    # resets the machine.
+    require(
+        "EXE_LOAD_ADDRESS        EQU 08100h" in weather_source
+        and "04100h" not in weather_source,
+        "both clients must load at #8100; a WIN1-resident program cannot "
+        "survive a DSS video mode switch",
+    )
+    require(
+        graphics_ui_source.count("LD      A, 1\n        CALL    LIBMAN.l_load") == 2,
+        "GFX320 and AFNT320 must map into WIN1, since WIN2 now holds this "
+        "program and its stack",
+    )
+    # Rendering defects that were each visible on hardware and are easy to
+    # reintroduce, since all four look plausible in isolation.
+    require(
+        "LD      DE, WD_MIN" in graphics_ui_source,
+        "the first day row is WD_MIN; reading the record base prints WD_YEAR "
+        "as tenths of a degree",
+    )
+    require(
+        "AND     3\n        JR      NZ, .NEXT" not in graphics_ui_source,
+        "tile grid width must come from the caller, not a hardcoded 4-wide row",
+    )
+    require(
+        graphics_ui_source.count("CALL    GRAPHICS_DAY_COUNT") == 2,
+        "both day loops must honour WM_DAY_COUNT instead of assuming six",
+    )
+    require("ANTONFNT" not in source, "runtime must not reference legacy ANTONFNT")
     require(
         "ENV_VALUE_SIZE  EQU 256" in source,
         "ENV_GET buffer must cover DSS's maximum environment value",
     )
+
+
+def check_graphics_exe() -> None:
+    data = (BUILD / "WEATHER.EXE").read_bytes()
+    require(data[:3] == b"EXE" and data[3] == 1, "WEATHER.EXE header is invalid")
+    loader_size = struct.unpack_from("<H", data, 8)[0]
+    require(loader_size > 0, "WEATHER.EXE must be preload-enabled")
+    tail = 0x200 + loader_size
+    require(data[tail:tail + 4] == b"WFG1", "graphics manifest is missing")
+    version, count, size = struct.unpack_from("<BBH", data, tail + 4)
+    require((version, count, size) == (1, 5, 0x4000), "graphics manifest has invalid geometry")
+    sizes = struct.unpack_from("<5H", data, tail + 12)
+    # Uncompressed for now: every stored page is exactly one DSS page, which is
+    # what lets the client read straight from the file into its target window.
+    require(all(size == 0x4000 for size in sizes), "stored graphic page must be a full page")
+    require(len(data) == tail + 22 + sum(sizes), "manifest does not describe WEATHER.EXE tail")
 
 
 def check_zip_if_present() -> None:
@@ -94,7 +277,7 @@ def check_zip_if_present() -> None:
     with zipfile.ZipFile(archive) as package:
         names = sorted(package.namelist())
     require(
-        names == ["README.TXT", "UNETESP.DLL", "UNETRTL.DLL", "WEATHERC.EXE"],
+        names == ["AFNT320.DLL", "GFX320.DLL", "README.TXT", "UNETESP.DLL", "UNETRTL.DLL", "WEATHER.EXE", "WEATHERC.EXE"],
         f"unexpected ZIP contents: {names}",
     )
 
@@ -103,6 +286,7 @@ def main() -> int:
     check_runtime_files()
     check_messages()
     check_source_contract()
+    check_graphics_exe()
     check_zip_if_present()
     print("Host artifact tests: OK")
     return 0

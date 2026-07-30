@@ -1,5 +1,6 @@
 ; ============================================================================
 ; WEATHERC.EXE - console WX1 forecast client for Sprinter DSS.
+; WEATHER.EXE is built from the same client with WEATHER_GRAPHICS defined.
 ;
 ; Reads NET from the DSS environment, selects a prebuilt UNET backend, loads
 ; it through current libman, validates ABI/capabilities, receives WX1 and
@@ -8,6 +9,12 @@
 
 EXE_VERSION             EQU 1
 EXE_HEADER_SIZE         EQU 0200h
+; #8100 (WIN2) for both builds.  A WIN1-resident program cannot survive a
+; DSS video mode switch: SETVMOD -> SAVETXT -> BIOS WIN_COPY maps video page
+; #50 over WIN1 for the duration of the copy while holding the displaced page
+; number on the CALLER's stack (FUNC_LOW_PRINT.ASM:1506-1556).  That is sound
+; only when the caller's stack lives outside WIN1, which is why every stock
+; DSS program loads here.
 EXE_LOAD_ADDRESS        EQU 08100h
 
 FLAG_DLL_LOADED         EQU 00000001b
@@ -29,7 +36,14 @@ EXIT_TRANSPORT          EQU 5
         INCLUDE "dss.inc"
         INCLUDE "unet.inc"
 
+        IFDEF WEATHER_GRAPHICS
+        ; UNET, GFX320 and AFNT320 are retained as three handles.  libman
+        ; maps the requested handle into the same WIN1 for every l_call.
+        DEFINE  LIBMAN_MAX_LIBS 3
+        INCLUDE "gfx320.inc"
+        ELSE
         DEFINE  LIBMAN_MAX_LIBS 1
+        ENDIF
         ; Keep the successful loader path compact, but publish the exact
         ; loading stage and a DLL INIT status when a real machine rejects it.
         DEFINE  LIBMAN_DIAGNOSTICS
@@ -37,13 +51,18 @@ EXIT_TRANSPORT          EQU 5
 
         MODULE  MAIN
 
-; DSS EXE v1 header. The code starts at file offset 0x200 and is loaded into
-; WIN2 at 0x8100. OFFCOD is a little-endian 32-bit value.
+; DSS EXE v1 header.  The graphics variant is a PRELOAD executable: DSS loads
+; its resident WIN1 image and leaves WEATHER.EXE open at the resource tail.
+; START stages that compact tail and closes the file before entering UNET.
         ORG     EXE_LOAD_ADDRESS - EXE_HEADER_SIZE
 EXE_HEADER:
         DB      "EXE", EXE_VERSION
         DD      EXE_HEADER_SIZE
+        IFDEF WEATHER_GRAPHICS
+        DW      WEATHER_LOADER_SIZE
+        ELSE
         DW      0                       ; no primary loader
+        ENDIF
         DS      6, 0                    ; reserved
         DW      START                   ; load address
         DW      START                   ; entry point
@@ -58,10 +77,30 @@ START:
         LD      SP, STACK_TOP
         CALL    CLEAR_BSS
 
+        IFDEF WEATHER_GRAPHICS
+        LD      A,(IX-3)                ; DSS PRELOAD file handle
+        LD      (GRAPHICS_FILE_HANDLE),A
+        ENDIF
+
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_GRAPHICS_BANNER
+        ELSE
         LD      HL, MSG_BANNER
+        ENDIF
         CALL    PUTS_LN
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_GRAPHICS_STAGE
+        ELSE
         LD      HL, MSG_STAGE
+        ENDIF
         CALL    PUTS_LN
+        IFDEF WEATHER_GRAPHICS
+        ; A PRELOAD file belongs to the loader, not to the runtime network
+        ; phase.  Copy the small packed tail into one DSS page and close the
+        ; handle before UNET starts its interrupt-driven receive wait.
+        CALL    GRAPHICS_STAGE_ASSETS
+        JP      C, GRAPHICS_BOOT_ERROR
+        ENDIF
 
 ATTEMPT_START:
         CALL    ATTEMPT_RESET
@@ -88,8 +127,12 @@ ATTEMPT_START:
         LD      HL, (DLL_NAME_PTR)
         CALL    PUTS_LN
 
+        IFDEF WEATHER_GRAPHICS
+        CALL    GRAPHICS_REUSE_UNET
+        JP      Z, UNET_READY
+        ENDIF
         LD      HL, (DLL_NAME_PTR)
-        LD      A, 1                    ; UNET owns WIN1 (0x4000..0x7fff)
+        LD      A, 1                    ; every DLL maps into WIN1
         CALL    LIBMAN.l_load
         JP      C, ERROR_LOAD
 
@@ -126,6 +169,12 @@ ATTEMPT_START:
         AND     UNET_CAP_TCP
         JP      Z, ERROR_TCP_CAP
 
+        IFDEF WEATHER_GRAPHICS
+        LD      A, (BACKEND)
+        LD      (LOADED_BACKEND), A
+        ENDIF
+
+UNET_READY:
         LD      A, UNET_OPT_CANCELKEYS
         LD      DE, 1
         LD      B, UNET_FN_SETOPT
@@ -176,7 +225,11 @@ ATTEMPT_START:
         JP      Z, ERROR_SERVICE
         CP      WX1_OK
         JP      NZ, ERROR_WX1
+        IFDEF WEATHER_GRAPHICS
+        CALL    GRAPHICS_RENDER_FORECAST
+        ELSE
         CALL    TEXT_RENDER_FORECAST
+        ENDIF
 
         LD      B, EXIT_OK
         JP      ATTEMPT_FINISH
@@ -521,8 +574,17 @@ PRINT_CONFIG_HINT:
 
         INCLUDE "config.asm"
         INCLUDE "wx1.asm"
+        IFDEF WEATHER_GRAPHICS
+        INCLUDE "graphics_text.asm"
+        INCLUDE "graphics_ui.asm"
+        ELSE
         INCLUDE "text_ui.asm"
+        ENDIF
         INCLUDE "transport.asm"
+        ; hrust_depack.asm is intentionally not assembled: resources ship
+        ; uncompressed for now.  The depacker stays in the tree, and
+        ; tests/z80/t_hrust.asm keeps exercising it, so reintroducing
+        ; compression is a build-path change rather than a rewrite.
 
 ; ---------------------------------------------------------------------------
 ; Attempt lifecycle, idempotent cleanup and DSS exit.
@@ -532,6 +594,15 @@ ATTEMPT_RESET:
         ; that is deliberately re-discovered from CFG/ENV on every refresh.
         XOR     A
         LD      (BACKEND), A
+        IFDEF WEATHER_GRAPHICS
+        ; A validated UNET handle remains mapped by libman in WIN2 between
+        ; refreshes.  It is replaced only when NET changes backend.
+        LD      (DLL_NAME_PTR), A
+        LD      (DLL_NAME_PTR + 1), A
+        LD      (LAST_UNET_STATUS), A
+        CALL    WX1_RESET
+        RET
+        ELSE
         LD      (DLL_HANDLE), A
         LD      (DLL_HANDLE + 1), A
         LD      (DLL_NAME_PTR), A
@@ -540,6 +611,7 @@ ATTEMPT_RESET:
         LD      (STATE_FLAGS), A
         CALL    WX1_RESET
         RET
+        ENDIF
 
 ; B is the exit category of the completed attempt. Retry reloads both CFG and
 ; NET, while Esc returns the category of an unrecovered error (or 0 on success).
@@ -571,6 +643,9 @@ EXIT_PROGRAM:
         LD      A, B
         LD      (EXIT_CODE), A
         CALL    CLEANUP
+        IFDEF WEATHER_GRAPHICS
+        CALL    GRAPHICS_FINALIZE
+        ENDIF
         LD      A, (EXIT_CODE)
         LD      B, A
         LD      C, DSS_EXIT
@@ -599,6 +674,13 @@ CLEANUP:
         LD      (STATE_FLAGS), A
 
 .FREE_DLL:
+        IFDEF WEATHER_GRAPHICS
+        RET
+        ELSE
+        JP      FREE_UNET
+        ENDIF
+
+FREE_UNET:
         LD      A, (STATE_FLAGS)
         AND     FLAG_DLL_LOADED
         RET     Z
@@ -608,6 +690,7 @@ CLEANUP:
         LD      (STATE_FLAGS), A
         LD      (DLL_HANDLE), A
         LD      (DLL_HANDLE + 1), A
+        LD      (LOADED_BACKEND), A
         RET
 
 CLEAR_BSS:
@@ -721,7 +804,9 @@ INFO_ESP_TAG:
 INFO_RTL_TAG:
         DB      "UNETRTL", 0
 
-        INCLUDE "messages.inc"
+        ; Keep this explicit: WEATHER.EXE is assembled through src/weather.asm
+        ; and sjasmplus resolves nested includes from that source directory.
+        INCLUDE "../build/generated/messages.inc"
 
         ENDMODULE
 
@@ -735,13 +820,17 @@ INFO_RTL_TAG:
 ; not have a separate BSS-size header field: memory after the raw image may be
 ; reused by another allocation, so receive buffers must be emitted explicitly.
 BSS_BASE        EQU $
+        IFDEF WEATHER_GRAPHICS
+WEATHER_LOADER_SIZE EQU BSS_BASE - EXE_LOAD_ADDRESS
+        ENDIF
 DLL_HANDLE      EQU BSS_BASE
 STATE_FLAGS     EQU DLL_HANDLE + 2
 BACKEND         EQU STATE_FLAGS + 1
 EXIT_CODE       EQU BACKEND + 1
 LAST_UNET_STATUS EQU EXIT_CODE + 1
 DLL_NAME_PTR    EQU LAST_UNET_STATUS + 1
-UNET_CAPS       EQU DLL_NAME_PTR + 2
+LOADED_BACKEND  EQU DLL_NAME_PTR + 2
+UNET_CAPS       EQU LOADED_BACKEND + 1
 UNET_ABI        EQU UNET_CAPS + 2
 ENV_VALUE       EQU UNET_ABI + 2
 ; DSS ENV_GET has no destination-capacity argument. ENV_SET limits a complete
@@ -818,15 +907,65 @@ WX1_DATE_DAY    EQU WX1_DATE_MONTH + 1
 WX1_DATE_YEAR   EQU WX1_DATE_DAY + 1
 WX1_STAGE_MODEL EQU WX1_DATE_YEAR + 2
 WX1_MODEL       EQU WX1_STAGE_MODEL + WM_MODEL_SIZE
+        IFDEF WEATHER_GRAPHICS
+        ; text_ui.asm is not assembled into the graphics client, so its ten
+        ; bytes of scratch were pure dead weight in the one window that has
+        ; none to spare.
+LAST_ATTEMPT_EXIT EQU WX1_MODEL + WM_MODEL_SIZE
+        ELSE
 TEXT_DAYS_LEFT  EQU WX1_MODEL + WM_MODEL_SIZE
 TEXT_DECIMAL    EQU TEXT_DAYS_LEFT + 1
 TEXT_NUMBER_BUFFER EQU TEXT_DECIMAL + 1
 TEXT_NUMBER_BUFFER_SIZE EQU 8
 LAST_ATTEMPT_EXIT EQU TEXT_NUMBER_BUFFER + TEXT_NUMBER_BUFFER_SIZE
+        ENDIF
+        IFDEF WEATHER_GRAPHICS
+GRAPHICS_FILE_HANDLE EQU LAST_ATTEMPT_EXIT + 1
+ASSET_BLOCK     EQU GRAPHICS_FILE_HANDLE + 1
+ASSET_ALLOCATED EQU ASSET_BLOCK + 1
+ASSET_PAGE_INDEX EQU ASSET_ALLOCATED + 1
+; No scratch-block or packed-stream fields: resources ship uncompressed, so
+; pages are read from the file straight into their own DSS page.
+;
+; There is deliberately no physical-page field either.  BIOS EMM_FN5 requires a
+; destination that accepts up to 256 bytes and this WIN1-resident image has no
+; room for one; a short field overruns into GRAPHICS_SAVED_WIN0/WIN1/WIN3,
+; whose bytes GRAPHICS_RESTORE_WINDOWS then pushes into the page ports.
+; GRAPHICS_BOOT borrows CFG_FILE_BUFFER instead.
+ASSET_MANIFEST  EQU ASSET_PAGE_INDEX + 1
+GFX_HANDLE      EQU ASSET_MANIFEST + WFG_MANIFEST_SIZE
+AFNT_HANDLE     EQU GFX_HANDLE + 2
+; libman returns a table index in L with H forced to 0 (libman_core13.asm:579),
+; so 0 is a valid handle - the first library loaded gets it.  "Loaded" must
+; therefore be tracked separately from the handle value.
+GRAPHICS_LIBS_LOADED EQU AFNT_HANDLE + 2
+GRAPHICS_OLD_MODE EQU GRAPHICS_LIBS_LOADED + 1
+GRAPHICS_OLD_SCREEN EQU GRAPHICS_OLD_MODE + 1
+GRAPHICS_SAVED_WIN0 EQU GRAPHICS_OLD_SCREEN + 1
+GRAPHICS_SAVED_WIN1 EQU GRAPHICS_SAVED_WIN0 + 1
+GRAPHICS_SAVED_WIN3 EQU GRAPHICS_SAVED_WIN1 + 1
+GRAPHICS_NUMBER EQU GRAPHICS_SAVED_WIN3 + 1
+GRAPHICS_TILE_REFS EQU GRAPHICS_NUMBER + 7
+GRAPHICS_TILE_LEFT EQU GRAPHICS_TILE_REFS + 2
+GRAPHICS_TILE_WIDTH EQU GRAPHICS_TILE_LEFT + 1
+GRAPHICS_TILE_COLUMN EQU GRAPHICS_TILE_WIDTH + 1
+GRAPHICS_ICON_INDEX EQU GRAPHICS_TILE_COLUMN + 1
+GRAPHICS_DAY_X_PTR EQU GRAPHICS_ICON_INDEX + 1
+GRAPHICS_DAY_LEFT EQU GRAPHICS_DAY_X_PTR + 2
+GRAPHICS_DAY_MODEL_PTR EQU GRAPHICS_DAY_LEFT + 1
+BSS_END         EQU GRAPHICS_DAY_MODEL_PTR + 2
+        ELSE
 BSS_END         EQU LAST_ATTEMPT_EXIT + 1
+        ENDIF
 BSS_SIZE        EQU BSS_END - BSS_BASE
 
+        IFDEF WEATHER_GRAPHICS
+        ; Match UNETTEST's proven stack reservation. SEND/RECV traverse
+        ; libman, DLL dispatch and the complete RTL TCP stack.
 STACK_SIZE      EQU 0600h
+        ELSE
+STACK_SIZE      EQU 0600h
+        ENDIF
 STACK_BOTTOM    EQU BSS_END
 STACK_TOP       EQU STACK_BOTTOM + STACK_SIZE
 
@@ -838,6 +977,8 @@ STACK_TOP       EQU STACK_BOTTOM + STACK_SIZE
 IMAGE_END       EQU $
 
         ASSERT  IMAGE_END = STACK_TOP
+        ; Both clients live in WIN2 now; nothing of ours may sit in WIN1, which
+        ; DSS's SETVMOD commandeers for the BIOS text-screen copy.
         ASSERT  IMAGE_END < 0C000h
         ASSERT  STACK_TOP <= 0C000h
         ASSERT  ENV_VALUE + ENV_VALUE_SIZE <= 0C000h

@@ -28,7 +28,7 @@ SUBMODULES = {
     ),
     "extern/sprinter-libs": (
         "git@github.com:witchcraft2001/sprinter-libs.git",
-        "169f515f4d5a8142eab1b8783146f7388b7dba74",
+        "a1604d7a4dc9258617e8c2b7b0e53d8eb04d1868",
     ),
 }
 
@@ -40,6 +40,16 @@ DLLS = {
     "extern/rtl_net/UNETRTL.DLL": (
         13_651,
         "051e53b1a4c10f3a41ddad8ad3f26dd974786ebd821c17f8202fb2d91b702fb1",
+    ),
+}
+
+GRAPHICS_DLLS = {
+    "extern/sprinter-libs/afnt320/AFNT320.DLL": (
+        "AFNT320.DLL",
+        ""),
+    "extern/sprinter-libs/gfx320/GFX320.DLL": (
+        "GFX320.DLL",
+        "fc7c0271e20e93be520933f193d0e70a7883940a5b5b131de34fddad333b1f48",
     ),
 }
 
@@ -108,6 +118,17 @@ def check_dlls() -> None:
     rtl_inc = (ROOT / "extern/rtl_net/src/include/unet.inc").read_bytes()
     if esp_inc != rtl_inc:
         fail("UNET ABI include files in ESP and RTL submodules differ")
+
+    for rel_path, (name, expected_sha256) in GRAPHICS_DLLS.items():
+        path = ROOT / rel_path
+        if not path.is_file():
+            fail(f"prebuilt graphics DLL is missing: {rel_path}")
+        if path.name != name:
+            fail(f"unexpected graphics DLL name: {path.name}")
+        if expected_sha256:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if digest != expected_sha256:
+                fail(f"{rel_path}: unexpected SHA-256 {digest}")
 
 
 def verify_with_libman() -> None:

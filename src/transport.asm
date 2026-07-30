@@ -30,6 +30,10 @@ GOPHER_FETCH:
         CALL    GOPHER_BUILD_REQUEST
         JP      C, .FAIL
 
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_GRAPHICS_CONNECT
+        CALL    PUTS_LN
+        ENDIF
         XOR     A
         LD      DE, CFG_HOST
         LD      IX, CFG_PORT
@@ -42,6 +46,10 @@ GOPHER_FETCH:
         OR      FLAG_CHANNEL_OPEN
         LD      (STATE_FLAGS), A
 
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_GRAPHICS_SENDING
+        CALL    PUTS_LN
+        ENDIF
         XOR     A
         LD      DE, REQUEST_BUFFER
         LD      IX, (REQUEST_SIZE)
@@ -55,11 +63,16 @@ GOPHER_FETCH:
         LD      DE, (REQUEST_SIZE)
         OR      A
         SBC     HL, DE
-        JR      Z, .RECV_LOOP
+        JR      Z, .SEND_OK
         LD      A, TST_SEND
         LD      B, TERR_SHORT_SEND
         JP      TRANSPORT_FAIL
 
+.SEND_OK:
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_GRAPHICS_SEND
+        CALL    PUTS_LN
+        ENDIF
 .RECV_LOOP:
         XOR     A
         LD      DE, RECV_BUFFER
