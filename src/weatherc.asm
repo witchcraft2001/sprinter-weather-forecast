@@ -581,10 +581,9 @@ PRINT_CONFIG_HINT:
         INCLUDE "text_ui.asm"
         ENDIF
         INCLUDE "transport.asm"
-        ; hrust_depack.asm is intentionally not assembled: resources ship
-        ; uncompressed for now.  The depacker stays in the tree, and
-        ; tests/z80/t_hrust.asm keeps exercising it, so reintroducing
-        ; compression is a build-path change rather than a rewrite.
+        IFDEF WEATHER_GRAPHICS
+        INCLUDE "hrust_depack.asm"
+        ENDIF
 
 ; ---------------------------------------------------------------------------
 ; Attempt lifecycle, idempotent cleanup and DSS exit.
@@ -922,17 +921,18 @@ LAST_ATTEMPT_EXIT EQU TEXT_NUMBER_BUFFER + TEXT_NUMBER_BUFFER_SIZE
         IFDEF WEATHER_GRAPHICS
 GRAPHICS_FILE_HANDLE EQU LAST_ATTEMPT_EXIT + 1
 ASSET_BLOCK     EQU GRAPHICS_FILE_HANDLE + 1
-ASSET_ALLOCATED EQU ASSET_BLOCK + 1
-ASSET_PAGE_INDEX EQU ASSET_ALLOCATED + 1
-; No scratch-block or packed-stream fields: resources ship uncompressed, so
-; pages are read from the file straight into their own DSS page.
-;
+ASSET_SCRATCH_BLOCK EQU ASSET_BLOCK + 1
+ASSET_ALLOCATED EQU ASSET_SCRATCH_BLOCK + 1
+ASSET_SCRATCH_ALLOCATED EQU ASSET_ALLOCATED + 1
+ASSET_PAGE_INDEX EQU ASSET_SCRATCH_ALLOCATED + 1
+ASSET_PACKED_PTR EQU ASSET_PAGE_INDEX + 1
+ASSET_DEST_PAGE EQU ASSET_PACKED_PTR + 2
 ; There is deliberately no physical-page field either.  BIOS EMM_FN5 requires a
-; destination that accepts up to 256 bytes and this WIN1-resident image has no
+; destination that accepts up to 256 bytes and this WIN2-resident image has no
 ; room for one; a short field overruns into GRAPHICS_SAVED_WIN0/WIN1/WIN3,
 ; whose bytes GRAPHICS_RESTORE_WINDOWS then pushes into the page ports.
 ; GRAPHICS_BOOT borrows CFG_FILE_BUFFER instead.
-ASSET_MANIFEST  EQU ASSET_PAGE_INDEX + 1
+ASSET_MANIFEST  EQU ASSET_DEST_PAGE + 1
 GFX_HANDLE      EQU ASSET_MANIFEST + WFG_MANIFEST_SIZE
 AFNT_HANDLE     EQU GFX_HANDLE + 2
 ; libman returns a table index in L with H forced to 0 (libman_core13.asm:579),
@@ -944,7 +944,9 @@ GRAPHICS_OLD_SCREEN EQU GRAPHICS_OLD_MODE + 1
 GRAPHICS_SAVED_WIN0 EQU GRAPHICS_OLD_SCREEN + 1
 GRAPHICS_SAVED_WIN1 EQU GRAPHICS_SAVED_WIN0 + 1
 GRAPHICS_SAVED_WIN3 EQU GRAPHICS_SAVED_WIN1 + 1
-GRAPHICS_NUMBER EQU GRAPHICS_SAVED_WIN3 + 1
+GRAPHICS_BOOT_SAVED_WIN0 EQU GRAPHICS_SAVED_WIN3 + 1
+GRAPHICS_BOOT_SAVED_WIN3 EQU GRAPHICS_BOOT_SAVED_WIN0 + 1
+GRAPHICS_NUMBER EQU GRAPHICS_BOOT_SAVED_WIN3 + 1
 ; Longest formatted value is "-100.0 C" plus NUL.
 GRAPHICS_TILE_REFS EQU GRAPHICS_NUMBER + 9
 GRAPHICS_TILE_LEFT EQU GRAPHICS_TILE_REFS + 2
@@ -961,9 +963,9 @@ BSS_END         EQU LAST_ATTEMPT_EXIT + 1
 BSS_SIZE        EQU BSS_END - BSS_BASE
 
         IFDEF WEATHER_GRAPHICS
-        ; Match UNETTEST's proven stack reservation. SEND/RECV traverse
-        ; libman, DLL dispatch and the complete RTL TCP stack.
-STACK_SIZE      EQU 0600h
+        ; Hrust occupies part of the fixed WIN2 image.  Network calls still
+        ; retain 1280 bytes, which leaves the required guard band below #C000.
+STACK_SIZE      EQU 0500h
         ELSE
 STACK_SIZE      EQU 0600h
         ENDIF

@@ -31,13 +31,14 @@ def main() -> int:
     if loader_size == 0 or resident_end > len(raw):
         raise SystemExit("invalid WEATHER resident loader size")
 
-    # Resources are embedded uncompressed for now, so every stored size is a
-    # full page.  The manifest keeps its per-page size field, which is what
-    # reintroducing compression will vary.
-    pages = [args.assets / f"page{index:02d}.bin" for index in range(PAGE_COUNT)]
-    streams = [page.read_bytes() for page in pages]
-    if any(len(stream) != PAGE_SIZE for stream in streams):
-        raise SystemExit("uncompressed graphic page must occupy exactly one DSS page")
+    streams = [
+        (args.assets / f"page{index:02d}.hst").read_bytes()
+        for index in range(PAGE_COUNT)
+    ]
+    if any(not stream or len(stream) > PAGE_SIZE for stream in streams):
+        raise SystemExit("each packed graphic stream must fit one DSS page")
+    if sum(map(len, streams)) > PAGE_SIZE:
+        raise SystemExit("packed graphic streams must fit the one-page staging buffer")
     manifest = struct.pack(
         "<4sBBHBBH5H",
         MANIFEST_MAGIC, 1, PAGE_COUNT, PAGE_SIZE, PALETTE_PAGE, 0,

@@ -28,11 +28,8 @@ byte_at() { byte_at_file "$dump" "$1"; }
 echo "Z80 response harness: OK"
 
 assets="$repo_root/build/generated/weather_assets"
-# The client currently embeds resources uncompressed, so the normal build no
-# longer packs them.  This harness keeps the depacker under test regardless, so
-# it produces the streams it needs itself - unconditionally, because a stale
-# .hst next to regenerated .bin pages fails as a depacker bug when the only
-# thing that changed is the artwork.
+# Regenerate the streams unconditionally: a stale .hst next to modified .bin
+# artwork would otherwise look like a depacker regression.
 python3 "$repo_root/tools/build_assets.py"
 python3 "$repo_root/tools/pack_hrust.py"
 hrust_bin="$build_dir/t_hrust.bin"

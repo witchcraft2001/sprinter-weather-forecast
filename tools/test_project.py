@@ -112,21 +112,19 @@ def check_source_contract() -> None:
         "read_sprinter_png" in asset_builder and 'SOURCE = ROOT / "resources" / "gfx"' in asset_builder,
         "graphics build must consume the editable PNG sources",
     )
-    # Compression is deliberately out of the build path for now.  Assert it is
-    # fully out rather than half out: a stale INCLUDE or a leftover call would
-    # reintroduce the depacker's DI without its staging.
     require(
-        "HRUST" not in graphics_source,
-        "resources ship uncompressed; the depacker must stay out of the client",
+        "HRUST_DEPACK" in graphics_ui_source
+        and "GRAPHICS_PACKED_TOTAL" in graphics_ui_source,
+        "graphics client must unpack the one-page Hrust resource tail",
     )
     require(
-        'INCLUDE "hrust_depack.asm"' not in weather_source,
-        "hrust_depack.asm must not be assembled while resources are uncompressed",
+        'INCLUDE "hrust_depack.asm"' in weather_source,
+        "WEATHER.EXE must assemble the Hrust depacker",
     )
     require(
         (ROOT / "src" / "hrust_depack.asm").is_file()
         and (ROOT / "tests" / "z80" / "t_hrust.asm").is_file(),
-        "keep the depacker and its harness in the tree for when compression returns",
+        "the runtime depacker and its Z80 harness are required",
     )
     require(
         weather_source.index("CALL    GRAPHICS_STAGE_ASSETS")
@@ -145,19 +143,6 @@ def check_source_contract() -> None:
     require(
         "CP      0FFh" in close_primary and "DSS_CLOSE_FILE" in close_primary,
         "DSS file handle 0 is valid; PRELOAD close must use 0xff as its sentinel",
-    )
-    # Estex-DSS SETWIN loads the slot port number into H and passes the pair
-    # through BIOS GetMemPage, so it returns with HL and DE destroyed (libman
-    # guards its own SETWIN3 the same way).  The read destination must therefore
-    # be built after the window is selected, not carried across the call.
-    read_loop = graphics_ui_source[
-        graphics_ui_source.index(".READ_PAGE:"):
-        graphics_ui_source.index("GRAPHICS_BOOT:")
-    ]
-    require(
-        read_loop.index("DSS_SETWIN3") < read_loop.index("LD      HL, 0C000h"),
-        "DSS SETWIN destroys HL/DE: select the window before building the "
-        "read destination",
     )
     # A truncated read shows up neither in carry nor in the status byte: DSS
     # compares position+size against the file size with SBC and treats "equal"
@@ -194,6 +179,11 @@ def check_source_contract() -> None:
         "LD      H, 0\n" not in graphics_ui_source,
         "generic DSS SETWIN treats H=0 as an error and substitutes WIN1, "
         "which pages the running program out; select a window explicitly",
+    )
+    require(
+        "OUT     (082h), A" in graphics_ui_source
+        and "LD      DE, 0" in graphics_ui_source,
+        "Hrust output must use WIN0; WIN2 contains WEATHER.EXE and its stack",
     )
     # BIOS EMM_FN5 needs a 256-byte destination, so the physical page list is
     # collected in the borrowed config buffer and consumed by the very next
@@ -287,9 +277,8 @@ def check_graphics_exe() -> None:
     version, count, size = struct.unpack_from("<BBH", data, tail + 4)
     require((version, count, size) == (1, 5, 0x4000), "graphics manifest has invalid geometry")
     sizes = struct.unpack_from("<5H", data, tail + 12)
-    # Uncompressed for now: every stored page is exactly one DSS page, which is
-    # what lets the client read straight from the file into its target window.
-    require(all(size == 0x4000 for size in sizes), "stored graphic page must be a full page")
+    require(all(0 < size <= 0x4000 for size in sizes), "packed graphic page has invalid size")
+    require(sum(sizes) <= 0x4000, "packed graphic tail must fit its staging page")
     require(len(data) == tail + 22 + sum(sizes), "manifest does not describe WEATHER.EXE tail")
 
 

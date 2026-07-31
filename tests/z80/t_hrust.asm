@@ -1,9 +1,9 @@
 ; Hrust depack harness.
 ;
-; Reproduces the address layout WEATHER.EXE really uses: packed streams at
-; #C000 (WIN3 on hardware), destination at #8000 (WIN2) and the caller stack
-; just below #8000 (WIN1).  All five streams are unpacked back to back, the
-; same way GRAPHICS_BOOT walks them.
+; Exercises the same source/destination separation as WEATHER.EXE: packed
+; streams are at #C000 (WIN3 on hardware), while the destination uses another
+; 16 KiB window. All five streams are unpacked back to back, like
+; GRAPHICS_BOOT.
 ;
 ; Two things are asserted per page: HRUST_DEPACK must restore SP exactly, and
 ; the 16 KiB result must match the checksum of the original page.  Checksums

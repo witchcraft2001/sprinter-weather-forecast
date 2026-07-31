@@ -41,6 +41,7 @@ build_console() {
 
 build_graphics() {
   python3 "$script_dir/build_assets.py"
+  python3 "$script_dir/pack_hrust.py"
   sjasmplus --nologo --fullpath "${asm_defines[@]}" \
     -I "$repo_root/extern/esp_net/src/include" -I "$repo_root/extern/libman/libman" \
     -I "$repo_root/extern/sprinter-libs/gfx320" -I "$build_dir/generated/weather_assets" \
