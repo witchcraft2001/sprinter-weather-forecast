@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Build deterministic 320-colour weather tiles and the GFX320 tables."""
+"""Build deterministic weather tiles from editor-friendly PNG sources."""
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
+
+from png_assets import read_sprinter_png, write_indexed_png
 
 
 PAGE = 16 * 1024
@@ -16,6 +19,27 @@ PALETTE_OFFSET = 0x3D00
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "build" / "generated" / "weather_assets"
+SOURCE = ROOT / "resources" / "gfx"
+
+WEATHER_ICONS = (
+    "00-clear",
+    "01-mainly-clear",
+    "02-partly-cloudy",
+    "03-cloudy",
+    "04-fog",
+    "05-drizzle",
+    "06-freezing-drizzle",
+    "07-rain",
+    "08-freezing-rain",
+    "09-snow",
+    "10-snow-grains",
+    "11-snow-showers",
+    "12-rain-showers",
+    "13-thunderstorm",
+    "14-unknown",
+)
+
+UTILITY_ICONS = ("thermometer", "humidity", "wind", "precipitation")
 
 
 def palette() -> bytes:
@@ -149,6 +173,11 @@ def utility_tile(index: int) -> bytes:
     return bytes(pixel for row in image for pixel in row)
 
 
+def utility_image(index: int) -> list[list[int]]:
+    data = utility_tile(index)
+    return [list(data[row * 16:(row + 1) * 16]) for row in range(16)]
+
+
 def halve(image: list[list[int]]) -> list[list[int]]:
     """64x64 -> 32x32.  Nearest-neighbour on purpose: these are index-mapped
     palette entries, so averaging them would invent colours that are not in the
@@ -186,29 +215,92 @@ def emit_inc(large: list[list[int]], small: list[list[int]], digits: list[int], 
     return "\n".join(lines) + "\n"
 
 
+def export_defaults(force: bool) -> None:
+    colours = palette()
+    destinations: list[tuple[Path, list[list[int]]]] = []
+    for kind, name in enumerate(WEATHER_ICONS):
+        large = weather_icon(kind, 64)
+        destinations.append((SOURCE / "weather" / "64" / f"{name}.png", large))
+        destinations.append((SOURCE / "weather" / "32" / f"{name}.png", halve(large)))
+    for index, name in enumerate(UTILITY_ICONS):
+        destinations.append((SOURCE / "ui" / f"{name}.png", utility_image(index)))
+    existing = [path for path, _ in destinations if path.exists()]
+    if existing and not force:
+        names = ", ".join(str(path.relative_to(ROOT)) for path in existing[:3])
+        raise SystemExit(
+            f"refusing to overwrite editable PNG assets ({names}); use --force only "
+            "when intentionally restoring generated defaults"
+        )
+    for path, image in destinations:
+        write_indexed_png(path, image, colours, TRANSPARENT)
+
+
+def load_sources() -> tuple[
+    list[list[list[int]]],
+    list[list[list[int]]],
+    list[list[list[int]]],
+]:
+    colours = palette()
+    try:
+        large = [
+            read_sprinter_png(SOURCE / "weather" / "64" / f"{name}.png", 64, colours)
+            for name in WEATHER_ICONS
+        ]
+        small = [
+            read_sprinter_png(SOURCE / "weather" / "32" / f"{name}.png", 32, colours)
+            for name in WEATHER_ICONS
+        ]
+        utilities = [
+            read_sprinter_png(SOURCE / "ui" / f"{name}.png", 16, colours)
+            for name in UTILITY_ICONS
+        ]
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"invalid graphics source: {exc}") from exc
+    return large, small, utilities
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--export-defaults",
+        action="store_true",
+        help="create the initial editable PNG set and exit",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="allow --export-defaults to overwrite edited PNG files",
+    )
+    args = parser.parse_args()
+    if args.force and not args.export_defaults:
+        parser.error("--force is only valid with --export-defaults")
+    if args.export_defaults:
+        export_defaults(args.force)
+        return 0
+
+    large_images, small_images, utility_images = load_sources()
     OUT.mkdir(parents=True, exist_ok=True)
     slots: list[bytes] = []
     large: list[list[int]] = []
-    for kind in range(15):
+    for image in large_images:
         refs = [ref(len(slots) + offset) for offset in range(16)]
         large.append(refs)
-        slots.extend(tiles(weather_icon(kind, 64)))
+        slots.extend(tiles(image))
     digits: list[int] = []
     for char in "0123456789+-.":
         digits.append(ref(len(slots)))
         slots.append(digit_tile(char))
     utilities: list[int] = []
-    for index in range(3):
+    for image in utility_images[:3]:
         utilities.append(ref(len(slots)))
-        slots.append(utility_tile(index))
+        slots.extend(tiles(image))
     small: list[list[int]] = []
-    for kind in range(15):
+    for image in small_images:
         refs = [ref(len(slots) + offset) for offset in range(4)]
         small.append(refs)
-        slots.extend(tiles(halve(weather_icon(kind, 64))))
+        slots.extend(tiles(image))
     utilities.append(ref(len(slots)))
-    slots.append(utility_tile(3))
+    slots.extend(tiles(utility_images[3]))
     if len(slots) != 317:
         raise SystemExit(f"internal tile layout error: {len(slots)} slots before palette")
     slots.extend([bytes([TRANSPARENT]) * 256] * 3)

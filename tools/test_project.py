@@ -40,6 +40,24 @@ def check_messages() -> None:
         value.encode("cp866")
 
 
+def check_graphics_sources() -> None:
+    large = sorted((ROOT / "resources/gfx/weather/64").glob("*.png"))
+    small = sorted((ROOT / "resources/gfx/weather/32").glob("*.png"))
+    utility = sorted((ROOT / "resources/gfx/ui").glob("*.png"))
+    require(len(large) == 15, f"expected 15 editable 64x64 icons, got {len(large)}")
+    require(len(small) == 15, f"expected 15 editable 32x32 icons, got {len(small)}")
+    require(len(utility) == 4, f"expected 4 editable UI icons, got {len(utility)}")
+    require(
+        [path.name for path in large] == [path.name for path in small],
+        "64x64 and 32x32 weather icon names differ",
+    )
+    for path in large + small + utility:
+        require(
+            path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"),
+            f"editable graphics source is not PNG: {path}",
+        )
+
+
 def check_source_contract() -> None:
     weather_source = (ROOT / "src" / "weatherc.asm").read_text(encoding="utf-8")
     graphics_ui_source = (ROOT / "src" / "graphics_ui.asm").read_text(encoding="utf-8")
@@ -89,6 +107,11 @@ def check_source_contract() -> None:
     require("RESPONSE_BUFFER" not in source, "text MVP must not retain the full raw response")
     require("AFNT320.DLL" in graphics_source, "graphics target must load AFNT320")
     require("GFX320.DLL" in graphics_source, "graphics target must load GFX320")
+    asset_builder = (ROOT / "tools/build_assets.py").read_text(encoding="utf-8")
+    require(
+        "read_sprinter_png" in asset_builder and 'SOURCE = ROOT / "resources" / "gfx"' in asset_builder,
+        "graphics build must consume the editable PNG sources",
+    )
     # Compression is deliberately out of the build path for now.  Assert it is
     # fully out rather than half out: a stale INCLUDE or a leftover call would
     # reintroduce the depacker's DI without its staging.
@@ -200,21 +223,11 @@ def check_source_contract() -> None:
         "GRAPHICS_LIBS_LOADED" in graphics_ui_source + weather_source,
         "the DLL pair needs a load flag distinct from the handle values",
     )
-    # Progress markers go to the screen because every variable this program owns
-    # lives in WIN1, and the paging failure under investigation is WIN1 itself
-    # losing the program; a marker in BSS cannot outlive that event.
-    require(
-        "DSS_PUTCHAR" in graphics_ui_source,
-        "graphics stage markers must reach the text screen, not a WIN1 variable",
-    )
-    load_libraries = graphics_ui_source[
-        graphics_ui_source.index("GRAPHICS_LOAD_LIBRARIES:"):
-        graphics_ui_source.index("GRAPHICS_DRAW:")
-    ]
-    require(
-        load_libraries.count("CALL    GRAPHICS_MARK") == 4,
-        "the DLL loader must mark each of its four stages",
-    )
+    for token in ("GRAPHICS_MARK", "GRAPHICS_REPORT_FAIL", "DSS_PUTCHAR"):
+        require(
+            token not in graphics_ui_source,
+            f"graphics frontend must not emit debug console markers ({token})",
+        )
     # Nothing of this program may live in WIN1.  DSS's SETVMOD reaches BIOS
     # WIN_COPY, which maps video page #50 over WIN1 for the duration of the
     # text-screen save while keeping the displaced page number on the CALLER's
@@ -246,6 +259,16 @@ def check_source_contract() -> None:
     require(
         graphics_ui_source.count("CALL    GRAPHICS_DAY_COUNT") == 2,
         "both day loops must honour WM_DAY_COUNT instead of assuming six",
+    )
+    require(
+        "CALL    GRAPHICS_FORMAT_LOCATION" in graphics_ui_source
+        and "LD      IX, 190" not in graphics_ui_source,
+        "location and country must be composed into one variable-width string",
+    )
+    require(
+        "CALL    GRAPHICS_APPEND_CELSIUS" in graphics_ui_source
+        and "LD      IX, 161" not in graphics_ui_source,
+        "the Celsius unit must be appended to the formatted temperature",
     )
     require("ANTONFNT" not in source, "runtime must not reference legacy ANTONFNT")
     require(
@@ -285,6 +308,7 @@ def check_zip_if_present() -> None:
 def main() -> int:
     check_runtime_files()
     check_messages()
+    check_graphics_sources()
     check_source_contract()
     check_graphics_exe()
     check_zip_if_present()

@@ -10,52 +10,12 @@ WFG_MANIFEST_SIZE       EQU 22
         INCLUDE "graphics_assets.inc"
         INCLUDE "page_sizes.inc"
 
-; ---------------------------------------------------------------------------
-; Progress reporting.
-;
-; Stage letters go to the text screen rather than into a variable: everything
-; this program owns lives in WIN1, so a marker in BSS cannot outlive a paging
-; fault, and the screen stays readable after a freeze.  Staging runs while the
-; screen is still in text mode, before SETVMOD.
-;
-; A successful startup prints "abcdddddе"; a failure prints the letter of the
-; step it did not finish, then "?" and the DSS/BIOS status in hex.
-; ---------------------------------------------------------------------------
-GRAPHICS_MARK:
-        LD      C, DSS_PUTCHAR
-        RST     DSS
-        RET
-
-; A = status byte to report.  Prints "?" then two hex digits.
-GRAPHICS_REPORT_FAIL:
-        PUSH    AF
-        LD      A, '?'
-        CALL    GRAPHICS_MARK
-        POP     AF
-GRAPHICS_MARK_HEX:
-        PUSH    AF
-        RRCA
-        RRCA
-        RRCA
-        RRCA
-        CALL    .NIBBLE
-        POP     AF
-.NIBBLE:
-        AND     0Fh
-        ADD     A, '0'
-        CP      '9' + 1
-        JP      C, GRAPHICS_MARK
-        ADD     A, 7
-        JP      GRAPHICS_MARK
-
 ; Stage the PRELOAD tail while the primary EXE handle is valid, then close it
 ; before any UNET call.  Resources are stored uncompressed for now, so each
 ; 16 KiB page is read straight from the file into its own DSS page and there is
 ; no separate expansion step.  Compression will be reintroduced later; the WFG1
 ; manifest already carries a per-page size, which is simply #4000 throughout.
 GRAPHICS_STAGE_ASSETS:
-        LD      A, 'a'
-        CALL    GRAPHICS_MARK
         IN      A, (082h)
         LD      (GRAPHICS_SAVED_WIN0), A
         IN      A, (0A2h)
@@ -75,8 +35,6 @@ GRAPHICS_STAGE_ASSETS:
         OR      A
         SBC     HL, DE
         JP      NZ, .FAIL
-        LD      A, 'b'
-        CALL    GRAPHICS_MARK
         LD      HL, ASSET_MANIFEST
         LD      DE, WFG_MAGIC
         LD      B, 4
@@ -111,8 +69,6 @@ GRAPHICS_STAGE_ASSETS:
         INC     HL
         DJNZ    .SIZES
 
-        LD      A, 'c'
-        CALL    GRAPHICS_MARK
         LD      B, GRAPHICS_ASSET_PAGES
         LD      C, DSS_GETMEM
         RST     DSS
@@ -123,8 +79,6 @@ GRAPHICS_STAGE_ASSETS:
         XOR     A
         LD      (ASSET_PAGE_INDEX), A
 .READ_PAGE:
-        LD      A, 'd'
-        CALL    GRAPHICS_MARK
         ; One page of the block into WIN3, then one page of the file into it.
         ; The destination pointer is built after SETWIN2 on purpose: Estex-DSS
         ; SETWIN returns with HL and DE destroyed.
@@ -155,19 +109,14 @@ GRAPHICS_STAGE_ASSETS:
         LD      (ASSET_PAGE_INDEX), A
         CP      GRAPHICS_ASSET_PAGES
         JR      C, .READ_PAGE
-        LD      A, 'e'
-        CALL    GRAPHICS_MARK
         CALL    GRAPHICS_CLOSE_PRIMARY
         CALL    GRAPHICS_RESTORE_WINDOWS
         OR      A
         RET
-        ; Report before freeing: GRAPHICS_FREE_ASSETS issues DSS calls of its
-        ; own and would overwrite the status being reported.
 .FAIL_FREE:
-        CALL    GRAPHICS_REPORT_FAIL
         CALL    GRAPHICS_FREE_ASSETS
         JR      .FAIL_EXIT
-.FAIL:  CALL    GRAPHICS_REPORT_FAIL
+.FAIL:
 .FAIL_EXIT:
         CALL    GRAPHICS_RESTORE_WINDOWS
         SCF
@@ -205,8 +154,7 @@ GRAPHICS_BOOT:
         JR      NZ, .FAIL
         OR      A
         RET
-.FAIL:  LD      A, 'B'
-        CALL    GRAPHICS_MARK
+.FAIL:
         SCF
         RET
 
@@ -286,8 +234,6 @@ GRAPHICS_RENDER_FORECAST:
         ; resource mapping. Assets are expanded once, after successful WX1.
         CALL    GRAPHICS_BOOT
         JR      C, .BOOT_FAIL
-        LD      A, '0'
-        CALL    GRAPHICS_MARK
         CALL    GRAPHICS_LOAD_LIBRARIES
         RET     C
         ; Compose the entire frame BEFORE switching the screen.  GFX320 renders
@@ -337,9 +283,7 @@ GRAPHICS_RENDER_FORECAST:
         CALL    GRAPHICS_RESTORE_MODE
         LD      B, EXIT_OK
         JP      EXIT_PROGRAM
-        ; Still in text mode here, so the status can be reported normally.
 .MODE_FAIL:
-        CALL    GRAPHICS_REPORT_FAIL
         SCF
         RET
 .BOOT_FAIL:
@@ -370,8 +314,6 @@ GRAPHICS_LOAD_LIBRARIES:
         JR      C, .FAIL
         OR      A
         JR      NZ, .FAIL_STATUS
-        LD      A, '1'
-        CALL    GRAPHICS_MARK
         ; GFX320 copies the table into its own storage, so this consumes the
         ; list GRAPHICS_BOOT just collected in the borrowed config buffer.
         LD      DE, CFG_FILE_BUFFER
@@ -381,8 +323,6 @@ GRAPHICS_LOAD_LIBRARIES:
         JR      C, .FAIL
         OR      A
         JR      NZ, .FAIL
-        LD      A, '2'
-        CALL    GRAPHICS_MARK
         LD      HL, AFNT_NAME
         LD      A, 1
         CALL    LIBMAN.l_load
@@ -390,8 +330,6 @@ GRAPHICS_LOAD_LIBRARIES:
         LD      (AFNT_HANDLE), HL
         LD      A, 1
         LD      (GRAPHICS_LIBS_LOADED), A
-        LD      A, '3'
-        CALL    GRAPHICS_MARK
 .WINDOWS:
         LD      HL, (GFX_HANDLE)
         LD      E, 3
@@ -405,12 +343,9 @@ GRAPHICS_LOAD_LIBRARIES:
         LD      B, AFNT_SET_WINDOW
         CALL    LIBMAN.l_call
         JR      C, .FAIL
-        LD      A, '4'
-        CALL    GRAPHICS_MARK
         XOR     A
         RET
 .FAIL_STATUS:
-        CALL    GRAPHICS_REPORT_FAIL
 .FAIL:  SCF
         RET
 
@@ -424,8 +359,6 @@ GRAPHICS_DRAW:
         JP      C, .FAIL
         OR      A
         JP      NZ, .FAIL
-        LD      A, '5'
-        CALL    GRAPHICS_MARK
         ; The palette sits at GRAPHICS_PALETTE_OFFSET inside asset page 4 and
         ; is mapped into WIN3: WIN0 is GFX320's tile source window, WIN1 is
         ; where libman maps the DLL for every l_call, and WIN2 holds this
@@ -450,31 +383,19 @@ GRAPHICS_DRAW:
         JP      C, .FAIL
         OR      A
         JP      NZ, .FAIL
-        LD      A, '6'
-        CALL    GRAPHICS_MARK
         CALL    GRAPHICS_DRAW_CURRENT_ICON
         JP      C, .FAIL
-        LD      A, '7'
-        CALL    GRAPHICS_MARK
         CALL    GRAPHICS_DRAW_DAY_ICONS
         JP      C, .FAIL
-        LD      A, '8'
-        CALL    GRAPHICS_MARK
         CALL    GRAPHICS_DRAW_DAY_VALUES
-        LD      A, '9'
-        CALL    GRAPHICS_MARK
         LD      DE, MSG_GRAPHICS_TITLE
         LD      IX, 12
         LD      IY, 8
         LD      A, 0Fh
         CALL    GRAPHICS_PRINT
-        LD      DE, WX1_MODEL + WM_LOCATION
+        CALL    GRAPHICS_FORMAT_LOCATION
+        LD      DE, CFG_FILE_BUFFER
         LD      IX, 12
-        LD      IY, 28
-        LD      A, 0Eh
-        CALL    GRAPHICS_PRINT
-        LD      DE, WX1_MODEL + WM_COUNTRY
-        LD      IX, 190
         LD      IY, 28
         LD      A, 0Eh
         CALL    GRAPHICS_PRINT
@@ -486,10 +407,9 @@ GRAPHICS_DRAW:
         LD      DE, (WX1_MODEL + WM_CURRENT + WC_TEMPERATURE)
         LD      IX, 100
         LD      IY, 80
-        CALL    GRAPHICS_PRINT_SIGNED_TENTHS
-        LD      DE, MSG_GRAPHICS_C
-        LD      IX, 161
-        LD      IY, 80
+        CALL    GRAPHICS_FORMAT_SIGNED_TENTHS
+        CALL    GRAPHICS_APPEND_CELSIUS
+        LD      DE, GRAPHICS_NUMBER
         LD      A, 0Fh
         CALL    GRAPHICS_PRINT
         LD      DE, MSG_GRAPHICS_HINT
@@ -497,11 +417,9 @@ GRAPHICS_DRAW:
         LD      IY, 238
         LD      A, 07h
         CALL    GRAPHICS_PRINT
-        LD      A, 'F'
-        CALL    GRAPHICS_MARK
         OR      A
         RET
-.FAIL:  CALL    GRAPHICS_REPORT_FAIL
+.FAIL:
         SCF
         RET
 
@@ -762,6 +680,13 @@ GRAPHICS_PRINT:
         JP      LIBMAN.l_call
 
 GRAPHICS_PRINT_SIGNED_TENTHS:
+        CALL    GRAPHICS_FORMAT_SIGNED_TENTHS
+        LD      DE, GRAPHICS_NUMBER
+        LD      A, 0Fh
+        JP      GRAPHICS_PRINT
+
+; DE = signed tenths. Writes an ASCIIZ number into GRAPHICS_NUMBER.
+GRAPHICS_FORMAT_SIGNED_TENTHS:
         LD      A, '+'
         BIT     7, D
         JR      Z, .SIGN
@@ -826,9 +751,60 @@ GRAPHICS_PRINT_SIGNED_TENTHS:
         XOR     A
         LD      (GRAPHICS_NUMBER + 5), A
 .OUT:
-        LD      DE, GRAPHICS_NUMBER
-        LD      A, 0Fh
-        JP      GRAPHICS_PRINT
+        RET
+
+; Append the unit to the just-formatted current temperature. The day columns
+; continue to use the number-only wrapper above.
+GRAPHICS_APPEND_CELSIUS:
+        LD      HL, GRAPHICS_NUMBER
+.FIND_END:
+        LD      A, (HL)
+        OR      A
+        JR      Z, .APPEND
+        INC     HL
+        JR      .FIND_END
+.APPEND:
+        LD      (HL), ' '
+        INC     HL
+        LD      (HL), 'C'
+        INC     HL
+        LD      (HL), 0
+        RET
+
+; Compose location and country as one string so AFNT320's variable-width font
+; determines their spacing naturally instead of two unrelated fixed X values.
+; CFG_FILE_BUFFER is free here: GRAPHICS_BOOT's temporary physical-page list
+; has already been consumed by GFX_SET_PAGE_TABLE.
+GRAPHICS_FORMAT_LOCATION:
+        LD      HL, WX1_MODEL + WM_LOCATION
+        LD      DE, CFG_FILE_BUFFER
+        CALL    GRAPHICS_COPY_Z_BODY
+        LD      A, (WX1_MODEL + WM_COUNTRY)
+        OR      A
+        JR      Z, .DONE
+        LD      A, ','
+        LD      (DE), A
+        INC     DE
+        LD      A, ' '
+        LD      (DE), A
+        INC     DE
+        LD      HL, WX1_MODEL + WM_COUNTRY
+        CALL    GRAPHICS_COPY_Z_BODY
+.DONE:
+        XOR     A
+        LD      (DE), A
+        RET
+
+; Copy ASCIIZ HL to DE without its terminator; return DE at the append point.
+GRAPHICS_COPY_Z_BODY:
+.NEXT:
+        LD      A, (HL)
+        OR      A
+        RET     Z
+        LD      (DE), A
+        INC     HL
+        INC     DE
+        JR      .NEXT
 
 ; HL dividend -> HL quotient, A remainder.  This is the same restoring
 ; 16-bit divide used by the console renderer, kept local to the graphics UI.
@@ -886,7 +862,6 @@ GRAPHICS_FADE_IN:
         JR      NZ, .LOOP
         RET
 .FADE_FAIL:
-        CALL    GRAPHICS_REPORT_FAIL
         SCF
         RET
 
@@ -913,7 +888,6 @@ GRAPHICS_FADE_OUT:
         JR      NZ, .LOOP
         RET
 .FADE_FAIL:
-        CALL    GRAPHICS_REPORT_FAIL
         SCF
         RET
 
@@ -937,5 +911,4 @@ GRAPHICS_RESTORE_MODE:
 WFG_MAGIC:              DB "WFG1"
 GFX_NAME:               DB "GFX320.DLL",0
 AFNT_NAME:              DB "AFNT320.DLL",0
-MSG_GRAPHICS_C:         DB " C",0
 DAY_ICON_X:             DW 8,60,112,164,216,268
