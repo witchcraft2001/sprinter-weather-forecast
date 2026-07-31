@@ -61,6 +61,12 @@ def check_graphics_sources() -> None:
 def check_source_contract() -> None:
     weather_source = (ROOT / "src" / "weatherc.asm").read_text(encoding="utf-8")
     graphics_ui_source = (ROOT / "src" / "graphics_ui.asm").read_text(encoding="utf-8")
+    loader_source = (ROOT / "src" / "weather_loader.asm").read_text(encoding="utf-8")
+    loader_page_loop = loader_source[
+        loader_source.index(".PAGE:") : loader_source.index(
+            "LD      A, (L_FILE_HANDLE)", loader_source.index(".PAGE:")
+        )
+    ]
     console_source = "\n".join(
         (ROOT / "src" / name).read_text(encoding="utf-8")
         for name in ("weatherc.asm", "config.asm", "wx1.asm", "text_ui.asm", "transport.asm")
@@ -113,85 +119,60 @@ def check_source_contract() -> None:
         "graphics build must consume the editable PNG sources",
     )
     require(
-        "HRUST_DEPACK" in graphics_ui_source
-        and "GRAPHICS_PACKED_TOTAL" in graphics_ui_source,
-        "graphics client must unpack the one-page Hrust resource tail",
+        "HRUST_DEPACK" not in graphics_ui_source + weather_source,
+        "resident graphics runtime must not retain the Hrust depacker",
     )
     require(
-        'INCLUDE "hrust_depack.asm"' in weather_source,
-        "WEATHER.EXE must assemble the Hrust depacker",
+        'INCLUDE "hrust_depack.asm"' in loader_source
+        and "WFG2" in loader_source
+        and "L_TRAMPOLINE" in loader_source,
+        "primary loader must own WFG2, Hrust and the WIN2 handoff",
     )
     require(
         (ROOT / "src" / "hrust_depack.asm").is_file()
         and (ROOT / "tests" / "z80" / "t_hrust.asm").is_file(),
-        "the runtime depacker and its Z80 harness are required",
+        "the loader depacker and its Z80 harness are required",
     )
     require(
-        weather_source.index("CALL    GRAPHICS_STAGE_ASSETS")
-        < weather_source.index("ATTEMPT_START:"),
-        "PRELOAD resources must be staged before the first network attempt",
+        "CALL    L_READ_EXACT" in loader_source
+        and "LD      (L_WIN0_PAGE), A" in loader_source
+        and "LD      A, (L_WIN0_PAGE)\n        OUT     (082h), A" in loader_source
+        and "LD      DE, 0" in loader_source,
+        "loader must verify reads and restore WIN0 after unpacking from WIN3",
     )
     require(
-        graphics_ui_source.index("CALL    GRAPHICS_CLOSE_PRIMARY")
-        < graphics_ui_source.index("GRAPHICS_BOOT:"),
-        "the PRELOAD EXE must be closed before deferred decompression/network use",
-    )
-    close_primary = graphics_ui_source[
-        graphics_ui_source.index("GRAPHICS_CLOSE_PRIMARY:"):
-        graphics_ui_source.index("GRAPHICS_BOOT_ERROR:")
-    ]
-    require(
-        "CP      0FFh" in close_primary and "DSS_CLOSE_FILE" in close_primary,
-        "DSS file handle 0 is valid; PRELOAD close must use 0xff as its sentinel",
-    )
-    # A truncated read shows up neither in carry nor in the status byte: DSS
-    # compares position+size against the file size with SBC and treats "equal"
-    # as an overrun, so a read ending exactly at EOF reports #FF with every
-    # byte delivered - which the last resource page always does (Estex-DSS
-    # API/Read.asm, .TEST_SIZE).  The returned byte count in DE is the only
-    # sound check.
-    staging = graphics_ui_source[
-        graphics_ui_source.index("GRAPHICS_STAGE_ASSETS:"):
-        graphics_ui_source.index("GRAPHICS_BOOT:")
-    ]
-    reads = staging.split("LD      C, DSS_READ_FILE\n        RST     DSS\n")
-    require(len(reads) == 3, "staging is expected to issue exactly two file reads")
-    for epilogue in reads[1:]:
-        code = [
-            line.strip() for line in epilogue.splitlines()
-            if line.strip() and not line.strip().startswith(";")
-        ]
-        window = code[:5]           # carry test, count, OR A, SBC, its branch
-        require(
-            any(line.startswith(("JR      C,", "JP      C,")) for line in window)
-            and any(line.startswith("SBC     HL, DE") for line in window),
-            "every DSS_READ_FILE in staging must compare the byte count DSS "
-            "returns in DE; carry and the status byte both miss a short read",
-        )
-        require(
-            not any(line.startswith("OR      A") and window[window.index(line) + 1:]
-                    and not window[window.index(line) + 1].startswith("SBC     HL, DE")
-                    for line in window),
-            "the status byte is #FF for a legitimate exactly-at-EOF read and "
-            "must not be branched on",
-        )
-    require(
-        "LD      H, 0\n" not in graphics_ui_source,
-        "generic DSS SETWIN treats H=0 as an error and substitutes WIN1, "
-        "which pages the running program out; select a window explicitly",
+        loader_page_loop.index("CALL    L_READ_EXACT\n        JP      C, L_FAIL")
+        < loader_page_loop.index("LD      A, (L_DEST_PAGE)\n        OUT     (082h), A"),
+        "WIN0 must keep the DSS RST vectors until packed input has been read",
     )
     require(
-        "OUT     (082h), A" in graphics_ui_source
-        and "LD      DE, 0" in graphics_ui_source,
-        "Hrust output must use WIN0; WIN2 contains WEATHER.EXE and its stack",
+        "SBC     HL, DE\n        RET     Z\n        SCF\n        RET" in loader_source,
+        "short DSS reads must fail L_READ_EXACT",
+    )
+    require(
+        "LD      HL, 0C000h + WFG_RUNTIME_OFFSET" in loader_source
+        and "WFG_RUNTIME_OFFSET       EQU 00100h" in loader_source,
+        "ORG #8100 runtime must be loaded at page offset #0100, not #0000",
+    )
+    psp_copy = (
+        "LD      HL, 08000h\n"
+        "        LD      DE, 0C000h\n"
+        "        LD      BC, WFG_PSP_SIZE\n"
+        "        LDIR"
+    )
+    require(
+        psp_copy in loader_source
+        and loader_source.index(psp_copy)
+        < loader_source.index("LD      HL, 0C000h + WFG_RUNTIME_OFFSET"),
+        "replacement WIN2 page must preserve the DSS PSP below ORG #8100",
     )
     # BIOS EMM_FN5 needs a 256-byte destination, so the physical page list is
     # collected in the borrowed config buffer and consumed by the very next
     # call.  Nothing may run between the producer and the consumer.
     require(
-        "ASSET_PHYSICAL_PAGES" not in graphics_source + weather_source,
+        "ASSET_PHYSICAL_PAGES" not in graphics_source + weather_source + loader_source,
         "EMM_FN5 must not write into a short dedicated field: it overruns into "
-        "GRAPHICS_SAVED_WIN0/WIN2/WIN3 and corrupts the page ports",
+        "runtime BSS and corrupts the page ports",
     )
     require(
         graphics_ui_source.index("CALL    GRAPHICS_BOOT")
@@ -273,13 +254,20 @@ def check_graphics_exe() -> None:
     loader_size = struct.unpack_from("<H", data, 8)[0]
     require(loader_size > 0, "WEATHER.EXE must be preload-enabled")
     tail = 0x200 + loader_size
-    require(data[tail:tail + 4] == b"WFG1", "graphics manifest is missing")
+    require(data[tail:tail + 4] == b"WFG2", "graphics manifest is missing")
     version, count, size = struct.unpack_from("<BBH", data, tail + 4)
-    require((version, count, size) == (1, 5, 0x4000), "graphics manifest has invalid geometry")
-    sizes = struct.unpack_from("<5H", data, tail + 12)
+    require((version, count, size) == (2, 5, 0x4000), "graphics manifest has invalid geometry")
+    runtime_size = struct.unpack_from("<H", data, tail + 10)[0]
+    sizes = struct.unpack_from("<5H", data, tail + 14)
+    require(0 < runtime_size <= 0x3F00, "resident graphics runtime has invalid size")
+    runtime = (BUILD / "WEATHER.RUNTIME").read_bytes()
+    require(runtime_size == len(runtime), "WFG2 runtime size differs from WEATHER.RUNTIME")
+    require(
+        data[tail + 24:tail + 24 + runtime_size] == runtime,
+        "WFG2 runtime payload differs from WEATHER.RUNTIME",
+    )
     require(all(0 < size <= 0x4000 for size in sizes), "packed graphic page has invalid size")
-    require(sum(sizes) <= 0x4000, "packed graphic tail must fit its staging page")
-    require(len(data) == tail + 22 + sum(sizes), "manifest does not describe WEATHER.EXE tail")
+    require(len(data) == tail + 24 + runtime_size + sum(sizes), "manifest does not describe WEATHER.EXE tail")
 
 
 def check_zip_if_present() -> None:

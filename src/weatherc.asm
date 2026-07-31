@@ -51,18 +51,14 @@ EXIT_TRANSPORT          EQU 5
 
         MODULE  MAIN
 
-; DSS EXE v1 header.  The graphics variant is a PRELOAD executable: DSS loads
-; its resident WIN1 image and leaves WEATHER.EXE open at the resource tail.
-; START stages that compact tail and closes the file before entering UNET.
+        IFNDEF WEATHER_RUNTIME
+; DSS EXE v1 header for the console target. WEATHER.EXE uses the separate
+; primary loader assembled from weather_loader.asm; this source is its runtime.
         ORG     EXE_LOAD_ADDRESS - EXE_HEADER_SIZE
 EXE_HEADER:
         DB      "EXE", EXE_VERSION
         DD      EXE_HEADER_SIZE
-        IFDEF WEATHER_GRAPHICS
-        DW      WEATHER_LOADER_SIZE
-        ELSE
         DW      0                       ; no primary loader
-        ENDIF
         DS      6, 0                    ; reserved
         DW      START                   ; load address
         DW      START                   ; entry point
@@ -71,15 +67,25 @@ EXE_HEADER:
         DS      EXE_HEADER_SIZE - ($ - EXE_HEADER), 0
 
         ASSERT  $ = EXE_LOAD_ADDRESS
+        ENDIF
         ORG     EXE_LOAD_ADDRESS
 
 START:
+        IFDEF WEATHER_GRAPHICS
+        DI                              ; loader handoff changes the WIN2 page
+        ENDIF
         LD      SP, STACK_TOP
+        IFDEF WEATHER_GRAPHICS
+        PUSH    AF                       ; primary loader passes asset block
+        EI
+        ENDIF
         CALL    CLEAR_BSS
 
         IFDEF WEATHER_GRAPHICS
-        LD      A,(IX-3)                ; DSS PRELOAD file handle
-        LD      (GRAPHICS_FILE_HANDLE),A
+        POP     AF
+        LD      (ASSET_BLOCK), A
+        LD      A, 1
+        LD      (ASSET_ALLOCATED), A
         ENDIF
 
         IFDEF WEATHER_GRAPHICS
@@ -94,14 +100,6 @@ START:
         LD      HL, MSG_STAGE
         ENDIF
         CALL    PUTS_LN
-        IFDEF WEATHER_GRAPHICS
-        ; A PRELOAD file belongs to the loader, not to the runtime network
-        ; phase.  Copy the small packed tail into one DSS page and close the
-        ; handle before UNET starts its interrupt-driven receive wait.
-        CALL    GRAPHICS_STAGE_ASSETS
-        JP      C, GRAPHICS_BOOT_ERROR
-        ENDIF
-
 ATTEMPT_START:
         CALL    ATTEMPT_RESET
         CALL    CONFIG_LOAD
@@ -581,9 +579,6 @@ PRINT_CONFIG_HINT:
         INCLUDE "text_ui.asm"
         ENDIF
         INCLUDE "transport.asm"
-        IFDEF WEATHER_GRAPHICS
-        INCLUDE "hrust_depack.asm"
-        ENDIF
 
 ; ---------------------------------------------------------------------------
 ; Attempt lifecycle, idempotent cleanup and DSS exit.
@@ -819,9 +814,6 @@ INFO_RTL_TAG:
 ; not have a separate BSS-size header field: memory after the raw image may be
 ; reused by another allocation, so receive buffers must be emitted explicitly.
 BSS_BASE        EQU $
-        IFDEF WEATHER_GRAPHICS
-WEATHER_LOADER_SIZE EQU BSS_BASE - EXE_LOAD_ADDRESS
-        ENDIF
 DLL_HANDLE      EQU BSS_BASE
 STATE_FLAGS     EQU DLL_HANDLE + 2
 BACKEND         EQU STATE_FLAGS + 1
@@ -919,21 +911,12 @@ TEXT_NUMBER_BUFFER_SIZE EQU 8
 LAST_ATTEMPT_EXIT EQU TEXT_NUMBER_BUFFER + TEXT_NUMBER_BUFFER_SIZE
         ENDIF
         IFDEF WEATHER_GRAPHICS
-GRAPHICS_FILE_HANDLE EQU LAST_ATTEMPT_EXIT + 1
-ASSET_BLOCK     EQU GRAPHICS_FILE_HANDLE + 1
-ASSET_SCRATCH_BLOCK EQU ASSET_BLOCK + 1
-ASSET_ALLOCATED EQU ASSET_SCRATCH_BLOCK + 1
-ASSET_SCRATCH_ALLOCATED EQU ASSET_ALLOCATED + 1
-ASSET_PAGE_INDEX EQU ASSET_SCRATCH_ALLOCATED + 1
-ASSET_PACKED_PTR EQU ASSET_PAGE_INDEX + 1
-ASSET_DEST_PAGE EQU ASSET_PACKED_PTR + 2
+ASSET_BLOCK     EQU LAST_ATTEMPT_EXIT + 1
+ASSET_ALLOCATED EQU ASSET_BLOCK + 1
 ; There is deliberately no physical-page field either.  BIOS EMM_FN5 requires a
 ; destination that accepts up to 256 bytes and this WIN2-resident image has no
-; room for one; a short field overruns into GRAPHICS_SAVED_WIN0/WIN1/WIN3,
-; whose bytes GRAPHICS_RESTORE_WINDOWS then pushes into the page ports.
-; GRAPHICS_BOOT borrows CFG_FILE_BUFFER instead.
-ASSET_MANIFEST  EQU ASSET_DEST_PAGE + 1
-GFX_HANDLE      EQU ASSET_MANIFEST + WFG_MANIFEST_SIZE
+; room for one. GRAPHICS_BOOT borrows CFG_FILE_BUFFER instead.
+GFX_HANDLE      EQU ASSET_ALLOCATED + 1
 AFNT_HANDLE     EQU GFX_HANDLE + 2
 ; libman returns a table index in L with H forced to 0 (libman_core13.asm:579),
 ; so 0 is a valid handle - the first library loaded gets it.  "Loaded" must
@@ -941,12 +924,7 @@ AFNT_HANDLE     EQU GFX_HANDLE + 2
 GRAPHICS_LIBS_LOADED EQU AFNT_HANDLE + 2
 GRAPHICS_OLD_MODE EQU GRAPHICS_LIBS_LOADED + 1
 GRAPHICS_OLD_SCREEN EQU GRAPHICS_OLD_MODE + 1
-GRAPHICS_SAVED_WIN0 EQU GRAPHICS_OLD_SCREEN + 1
-GRAPHICS_SAVED_WIN1 EQU GRAPHICS_SAVED_WIN0 + 1
-GRAPHICS_SAVED_WIN3 EQU GRAPHICS_SAVED_WIN1 + 1
-GRAPHICS_BOOT_SAVED_WIN0 EQU GRAPHICS_SAVED_WIN3 + 1
-GRAPHICS_BOOT_SAVED_WIN3 EQU GRAPHICS_BOOT_SAVED_WIN0 + 1
-GRAPHICS_NUMBER EQU GRAPHICS_BOOT_SAVED_WIN3 + 1
+GRAPHICS_NUMBER EQU GRAPHICS_OLD_SCREEN + 1
 ; Longest formatted value is "-100.0 C" plus NUL.
 GRAPHICS_TILE_REFS EQU GRAPHICS_NUMBER + 9
 GRAPHICS_TILE_LEFT EQU GRAPHICS_TILE_REFS + 2
@@ -963,9 +941,7 @@ BSS_END         EQU LAST_ATTEMPT_EXIT + 1
 BSS_SIZE        EQU BSS_END - BSS_BASE
 
         IFDEF WEATHER_GRAPHICS
-        ; Hrust occupies part of the fixed WIN2 image.  Network calls still
-        ; retain 1280 bytes, which leaves the required guard band below #C000.
-STACK_SIZE      EQU 0500h
+STACK_SIZE      EQU 0600h
         ELSE
 STACK_SIZE      EQU 0600h
         ENDIF

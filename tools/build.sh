@@ -42,14 +42,20 @@ build_console() {
 build_graphics() {
   python3 "$script_dir/build_assets.py"
   python3 "$script_dir/pack_hrust.py"
-  sjasmplus --nologo --fullpath "${asm_defines[@]}" \
+  sjasmplus --nologo --fullpath "${asm_defines[@]}" -DWEATHER_RUNTIME=1 \
     -I "$repo_root/extern/esp_net/src/include" -I "$repo_root/extern/libman/libman" \
     -I "$repo_root/extern/sprinter-libs/gfx320" -I "$build_dir/generated/weather_assets" \
-    --lst="$build_dir/$graphics_name.lst" --sym="$build_dir/$graphics_name.sym" \
-    --raw="$build_dir/$graphics_name.raw.EXE" "$repo_root/src/weather.asm"
-  python3 "$script_dir/pack_weather_exe.py" "$build_dir/$graphics_name.raw.EXE" \
-    "$build_dir/generated/weather_assets" "$build_dir/$graphics_name.EXE"
-  "$script_dir/check_exe.py" "$build_dir/$graphics_name.EXE" "$build_dir/$graphics_name.sym"
+    --lst="$build_dir/$graphics_name.runtime.lst" --sym="$build_dir/$graphics_name.runtime.sym" \
+    --raw="$build_dir/$graphics_name.RUNTIME" "$repo_root/src/weather.asm"
+  sjasmplus --nologo --fullpath \
+    -I "$repo_root/extern/esp_net/src/include" \
+    --lst="$build_dir/$graphics_name.loader.lst" --sym="$build_dir/$graphics_name.loader.sym" \
+    --raw="$build_dir/$graphics_name.LOADER.EXE" "$repo_root/src/weather_loader.asm"
+  python3 "$script_dir/pack_weather_exe.py" "$build_dir/$graphics_name.LOADER.EXE" \
+    "$build_dir/$graphics_name.RUNTIME" "$build_dir/generated/weather_assets" \
+    "$build_dir/$graphics_name.EXE"
+  "$script_dir/check_exe.py" "$build_dir/$graphics_name.EXE" "$build_dir/$graphics_name.loader.sym" \
+    "$build_dir/$graphics_name.runtime.sym"
 }
 
 case "$target" in

@@ -5,183 +5,16 @@ AFNT_APRINT             EQU 3
 AFNT_SET_WINDOW         EQU 4
 BIOS_GETMEMBLKPAGES     EQU 0C5h
 GFX_REQUIRED_CAPS       EQU GFX_CAP_ACCEL | GFX_CAP_KEY_FF | GFX_CAP_PALETTE_RGB8 | GFX_CAP_FADE | GFX_CAP_TILES | GFX_CAP_WIN0_SOURCE
-WFG_MANIFEST_SIZE       EQU 22
 
         INCLUDE "graphics_assets.inc"
-        INCLUDE "hrust_sizes.inc"
 
-; Stage the compact PRELOAD tail while its file handle is valid, then close the
-; file before any UNET call.  The five Hrust streams live together in one DSS
-; scratch page; their expanded form is deferred until the network session ends.
-GRAPHICS_STAGE_ASSETS:
-        IN      A, (082h)
-        LD      (GRAPHICS_SAVED_WIN0), A
-        IN      A, (0A2h)
-        LD      (GRAPHICS_SAVED_WIN1), A
-        IN      A, (0E2h)
-        LD      (GRAPHICS_SAVED_WIN3), A
-        LD      A, (GRAPHICS_FILE_HANDLE)
-        LD      HL, ASSET_MANIFEST
-        LD      DE, WFG_MANIFEST_SIZE
-        LD      C, DSS_READ_FILE
-        RST     DSS
-        JP      C, .FAIL
-        ; Verify the byte count DSS returns in DE, not its status byte.  See
-        ; the page read below for why the status cannot be trusted.  OR A only
-        ; clears carry for SBC; it leaves the status in A for the report.
-        LD      HL, WFG_MANIFEST_SIZE
-        OR      A
-        SBC     HL, DE
-        JP      NZ, .FAIL
-        LD      HL, ASSET_MANIFEST
-        LD      DE, WFG_MAGIC
-        LD      B, 4
-.MAGIC: LD      A, (DE)
-        CP      (HL)
-        JP      NZ, .FAIL
-        INC     DE
-        INC     HL
-        DJNZ    .MAGIC
-        LD      A, (ASSET_MANIFEST + 4)
-        CP      1
-        JP      NZ, .FAIL
-        LD      A, (ASSET_MANIFEST + 5)
-        CP      GRAPHICS_ASSET_PAGES
-        JP      NZ, .FAIL
-        LD      HL, (ASSET_MANIFEST + 6)
-        LD      DE, 4000h
-        OR      A
-        SBC     HL, DE
-        JP      NZ, .FAIL
-        ; The manifest and generated table come from the same packed streams.
-        ; Reject a stale/mismatched EXE before accepting any resource data.
-        LD      HL, ASSET_MANIFEST + 12
-        LD      DE, GRAPHICS_PACKED_SIZES
-        LD      B, GRAPHICS_ASSET_PAGES * 2
-.SIZES:
-        LD      A, (DE)
-        CP      (HL)
-        JP      NZ, .FAIL
-        INC     DE
-        INC     HL
-        DJNZ    .SIZES
-
-        LD      B, GRAPHICS_ASSET_PAGES
-        LD      C, DSS_GETMEM
-        RST     DSS
-        JP      C, .FAIL
-        LD      (ASSET_BLOCK), A
-        LD      A, 1
-        LD      (ASSET_ALLOCATED), A
-        LD      B, 1
-        LD      C, DSS_GETMEM
-        RST     DSS
-        JR      C, .FAIL_FREE
-        LD      (ASSET_SCRATCH_BLOCK), A
-        LD      A, 1
-        LD      (ASSET_SCRATCH_ALLOCATED), A
-        ; Set the scratch page before building the read arguments: DSS SETWIN
-        ; destroys HL and DE.
-        LD      A, (ASSET_SCRATCH_BLOCK)
-        LD      B, 0
-        LD      C, DSS_SETWIN3
-        RST     DSS
-        JR      C, .FAIL_FREE
-        LD      HL, 0C000h
-        LD      DE, GRAPHICS_PACKED_TOTAL
-        LD      A, (GRAPHICS_FILE_HANDLE)
-        LD      C, DSS_READ_FILE
-        RST     DSS
-        JR      C, .FAIL_FREE
-        ; At EOF DSS may return status #FF despite delivering every byte; DE is
-        ; the only reliable length result.
-        LD      HL, GRAPHICS_PACKED_TOTAL
-        OR      A
-        SBC     HL, DE
-        JR      NZ, .FAIL_FREE
-        CALL    GRAPHICS_CLOSE_PRIMARY
-        ; Both the packed tail and all expanded pages now belong to DSS memory;
-        ; do the one-time expansion before network code starts using WIN3.
-        CALL    GRAPHICS_BOOT
-        JR      C, .FAIL_EXIT
-        CALL    GRAPHICS_RESTORE_WINDOWS
-        OR      A
-        RET
-.FAIL_FREE:
-        CALL    GRAPHICS_FREE_ASSETS
-        JR      .FAIL_EXIT
-.FAIL:
-.FAIL_EXIT:
-        CALL    GRAPHICS_RESTORE_WINDOWS
-        SCF
-        RET
-
-; Expand the resident Hrust streams into the five dedicated asset pages. This
-; runs once during startup, before network code starts using WIN3. WEATHER.EXE
-; and its stack occupy WIN2, so source stays in WIN3 and each destination page
-; is temporarily mirrored into WIN0 at address #0000.
+; The primary loader has already allocated and expanded this block before it
+; transfers control to START. The runtime only obtains the physical page list
+; GFX320 needs; it has no knowledge of Hrust or the EXE resource tail.
 GRAPHICS_BOOT:
         LD      A, (ASSET_ALLOCATED)
         OR      A
         JP      Z, .FAIL
-        LD      A, (ASSET_SCRATCH_ALLOCATED)
-        OR      A
-        JR      Z, .PAGE_LIST           ; already expanded (R/Enter refresh)
-        IN      A, (082h)
-        LD      (GRAPHICS_BOOT_SAVED_WIN0), A
-        IN      A, (0E2h)
-        LD      (GRAPHICS_BOOT_SAVED_WIN3), A
-        LD      HL, 0C000h
-        LD      (ASSET_PACKED_PTR), HL
-        XOR     A
-        LD      (ASSET_PAGE_INDEX), A
-.PAGE:
-        ; DSS has no SETWIN0 shortcut.  Ask it to map the allocated page into
-        ; WIN3, preserve its physical-page byte, then put that byte in WIN0
-        ; after WIN3 is switched to the packed-stream scratch page.
-        LD      A, (ASSET_PAGE_INDEX)
-        LD      B, A
-        LD      A, (ASSET_BLOCK)
-        LD      C, DSS_SETWIN3
-        RST     DSS
-        JR      C, .FAIL_FREE
-        IN      A, (0E2h)
-        LD      (ASSET_DEST_PAGE), A
-        LD      A, (ASSET_SCRATCH_BLOCK)
-        LD      B, 0
-        LD      C, DSS_SETWIN3
-        RST     DSS
-        JR      C, .FAIL_FREE
-        LD      A, (ASSET_DEST_PAGE)
-        OUT     (082h), A
-        LD      HL, (ASSET_PACKED_PTR)
-        PUSH    HL
-        LD      A, (ASSET_PAGE_INDEX)
-        ADD     A, A
-        LD      E, A
-        LD      D, 0
-        LD      HL, GRAPHICS_PACKED_SIZES
-        ADD     HL, DE
-        LD      E, (HL)
-        INC     HL
-        LD      D, (HL)
-        POP     HL
-        PUSH    HL
-        ADD     HL, DE
-        LD      (ASSET_PACKED_PTR), HL
-        POP     HL
-        ; DE=#0000 writes through WIN0, HL is the current Hrust stream in
-        ; WIN3. HRUST_DEPACK restores SP but leaves interrupts disabled.
-        LD      DE, 0
-        CALL    HRUST_DEPACK
-        CALL    GRAPHICS_RESTORE_ASSET_WINDOWS
-        EI
-        LD      A, (ASSET_PAGE_INDEX)
-        INC     A
-        LD      (ASSET_PAGE_INDEX), A
-        CP      GRAPHICS_ASSET_PAGES
-        JR      C, .PAGE
-.PAGE_LIST:
         ; BIOS EMM_FN5 documents a destination that must accept up to 256 bytes
         ; (one byte per page of the block plus a #FF terminator), and there is
         ; no room for that in this WIN2-resident image.  Borrow the
@@ -203,73 +36,13 @@ GRAPHICS_BOOT:
         LD      A, B                    ; EMM_FN5 reports the page count in B
         CP      GRAPHICS_ASSET_PAGES
         JR      NZ, .FAIL
-        LD      A, (ASSET_SCRATCH_BLOCK)
-        LD      C, DSS_FREEMEM
-        RST     DSS
-        XOR     A
-        LD      (ASSET_SCRATCH_ALLOCATED), A
         OR      A
-        RET
-.FAIL_FREE:
-        ; A failed depack has IFF cleared. Restore the ports before any DSS
-        ; cleanup, then restore normal interrupt delivery.
-        CALL    GRAPHICS_RESTORE_ASSET_WINDOWS
-        EI
-        CALL    GRAPHICS_FREE_ASSETS
-        SCF
         RET
 .FAIL:
         SCF
         RET
 
-GRAPHICS_RESTORE_WINDOWS:
-        LD      A, (GRAPHICS_SAVED_WIN0)
-        OUT     (082h), A
-        LD      A, (GRAPHICS_SAVED_WIN1)
-        OUT     (0A2h), A
-        LD      A, (GRAPHICS_SAVED_WIN3)
-        OUT     (0E2h), A
-        RET
-
-; GRAPHICS_BOOT never changes WIN1: it may contain a live libman handle until
-; the normal refresh cleanup.  Only restore the two ports borrowed by Hrust.
-GRAPHICS_RESTORE_ASSET_WINDOWS:
-        LD      A, (GRAPHICS_BOOT_SAVED_WIN0)
-        OUT     (082h), A
-        LD      A, (GRAPHICS_BOOT_SAVED_WIN3)
-        OUT     (0E2h), A
-        RET
-
-GRAPHICS_CLOSE_PRIMARY:
-        LD      A, (GRAPHICS_FILE_HANDLE)
-        CP      0FFh
-        JR      Z, .CLEAR
-        LD      C, DSS_CLOSE_FILE
-        RST     DSS
-.CLEAR:
-        LD      A, 0FFh
-        LD      (GRAPHICS_FILE_HANDLE), A
-        RET
-
-GRAPHICS_BOOT_ERROR:
-        CALL    GRAPHICS_FREE_ASSETS
-        LD      HL, MSG_GRAPHICS_BOOT_ERROR
-        CALL    PUTS_LN
-        LD      B, EXIT_DLL
-        JP      EXIT_PROGRAM
-
 GRAPHICS_FREE_ASSETS:
-        CALL    GRAPHICS_CLOSE_PRIMARY
-.SCRATCH:
-        LD      A, (ASSET_SCRATCH_ALLOCATED)
-        OR      A
-        JR      Z, .ASSETS
-        LD      A, (ASSET_SCRATCH_BLOCK)
-        LD      C, DSS_FREEMEM
-        RST     DSS
-        XOR     A
-        LD      (ASSET_SCRATCH_ALLOCATED), A
-.ASSETS:
         LD      A, (ASSET_ALLOCATED)
         OR      A
         RET     Z
@@ -314,8 +87,7 @@ GRAPHICS_REUSE_UNET:
 
 GRAPHICS_RENDER_FORECAST:
         ; Keep startup and all network traffic independent from graphics
-        ; resource mapping. On refresh GRAPHICS_BOOT only rebuilds GFX's page
-        ; list because the startup expansion already released its scratch page.
+        ; resource mapping. GRAPHICS_BOOT only rebuilds GFX's page list.
         CALL    GRAPHICS_BOOT
         JR      C, .BOOT_FAIL
         CALL    GRAPHICS_LOAD_LIBRARIES
@@ -988,10 +760,8 @@ GRAPHICS_RESTORE_MODE:
         LD      A, (GRAPHICS_OLD_MODE)
         LD      C, DSS_SETVMOD
         RST     DSS
-        CALL    GRAPHICS_RESTORE_WINDOWS
         RET
 
-WFG_MAGIC:              DB "WFG1"
 GFX_NAME:               DB "GFX320.DLL",0
 AFNT_NAME:              DB "AFNT320.DLL",0
 DAY_ICON_X:             DW 8,60,112,164,216,268

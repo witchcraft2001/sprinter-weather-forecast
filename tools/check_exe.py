@@ -32,6 +32,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("exe", type=Path)
     parser.add_argument("symbols", type=Path)
+    parser.add_argument("runtime_symbols", type=Path, nargs="?")
     args = parser.parse_args()
 
     raw = args.exe.read_bytes()
@@ -55,7 +56,9 @@ def main() -> int:
     if not 0x8100 < stack <= 0xC000:
         fail(f"stack 0x{stack:04x} lies outside WIN2")
 
-    symbols = args.symbols.read_text(encoding="utf-8", errors="replace")
+    symbols = (args.runtime_symbols or args.symbols).read_text(
+        encoding="utf-8", errors="replace"
+    )
     image_end = symbol_value(symbols, "MAIN.IMAGE_END")
     bss_base = symbol_value(symbols, "MAIN.BSS_BASE")
     bss_end = symbol_value(symbols, "MAIN.BSS_END")
@@ -64,7 +67,7 @@ def main() -> int:
     image_limit = 0xC000
     if not (image_base < bss_base <= bss_end < stack_top == image_end):
         fail("invalid image/BSS/stack ordering")
-    if stack != stack_top:
+    if args.runtime_symbols is None and stack != stack_top:
         fail("header stack does not match MAIN.STACK_TOP")
     headroom = image_limit - stack_top
     # Bytes above STACK_TOP are neither stack nor image - the stack grows down.
@@ -80,7 +83,20 @@ def main() -> int:
     if graphics:
         expected_min = 512 + loader_size
         if len(raw) < expected_min:
-            fail("graphics EXE is shorter than its resident image")
+            fail("graphics EXE is shorter than its primary loader")
+        if args.runtime_symbols is not None:
+            loader_symbols = args.symbols.read_text(encoding="utf-8", errors="replace")
+            if symbol_value(loader_symbols, "WEATHER_LOADER_SIZE") != loader_size:
+                fail("header loader size does not match the primary loader")
+            tail = expected_min
+            if raw[tail:tail + 4] != b"WFG2":
+                fail("graphics EXE has no WFG2 loader manifest")
+            runtime_size = struct.unpack_from("<H", raw, tail + 10)[0]
+            stream_sizes = struct.unpack_from("<5H", raw, tail + 14)
+            if runtime_size != image_end - image_base:
+                fail("WFG2 runtime size does not match the runtime image")
+            if len(raw) != tail + 24 + runtime_size + sum(stream_sizes):
+                fail("WFG2 manifest does not describe the graphics EXE tail")
     elif 512 + (image_end - image_base) != len(raw):
         fail("EXE file size does not match assembled image end")
 

@@ -38,10 +38,9 @@ if [[ "${WEATHER_DEBUG_CFG:-0}" == "1" ]]; then
   cp "$repo_root/resources/WEATHER.CFG.sample" "$stage/WEATHER.CFG"
   mcopy -o -i "$image" "$stage/WEATHER.CFG" ::WEATHER.CFG
   # GFX320's own prebuilt reference consumer.  It enters video mode #81 exactly
-  # as WEATHER.EXE does, but as a plain WIN2 executable with no PRELOAD, so
-  # running it separates "this machine cannot enter #81 at all" from "our
-  # WIN1-resident PRELOAD context is what makes the switch fatal".  Debug image
-  # only: the stable artifact's contents are fixed.
+  # as WEATHER.EXE does, but without its PRELOAD loader. Running it separates
+  # a general #81 failure from the loader/runtime handoff. Debug image only:
+  # the stable artifact's contents are fixed.
   cp "$repo_root/extern/sprinter-libs/gfx320/GFX320.EXE" "$stage/GFXTEST.EXE"
   mcopy -o -i "$image" "$stage/GFXTEST.EXE" ::GFXTEST.EXE
 fi
