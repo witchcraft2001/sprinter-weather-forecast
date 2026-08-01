@@ -18,15 +18,15 @@ GRAPHICS_BOOT:
         ; BIOS EMM_FN5 documents a destination that must accept up to 256 bytes
         ; (one byte per page of the block plus a #FF terminator), and there is
         ; no room for that in this WIN2-resident image.  Borrow the
-        ; config file buffer: CONFIG_LOAD finished before the network phase, so
-        ; the buffer is dead here.  Only the five page numbers are retained.
+        ; config file buffer before CONFIG_LOAD uses it. Only the five page
+        ; numbers are retained.
         ;
         ; Writing the list straight into a GRAPHICS_ASSET_PAGES-sized field
         ; overruns it into GRAPHICS_SAVED_WIN0/WIN1/WIN3, and those bytes are
         ; then pushed into the page ports by GRAPHICS_RESTORE_WINDOWS.
         ; GFX_SET_PAGE_TABLE copies the list into the DLL immediately, so the
         ; buffer only has to survive until GRAPHICS_LOAD_LIBRARIES runs - which
-        ; GRAPHICS_RENDER_FORECAST calls directly after GRAPHICS_BOOT.
+        ; GRAPHICS_BEGIN_ATTEMPT calls directly after GRAPHICS_BOOT.
         ASSERT  CFG_FILE_MAX >= 256
         LD      A, (ASSET_BLOCK)
         LD      HL, CFG_FILE_BUFFER
@@ -55,6 +55,14 @@ GRAPHICS_FREE_ASSETS:
 
 ; Called once from the process exit path, after the network session unwind.
 GRAPHICS_FINALIZE:
+        LD      A, (GRAPHICS_MODE_ACTIVE)
+        OR      A
+        JR      Z, .LIBRARIES
+        CALL    GRAPHICS_FADE_OUT
+        CALL    GRAPHICS_RESTORE_MODE
+        XOR     A
+        LD      (GRAPHICS_MODE_ACTIVE), A
+.LIBRARIES:
         ; Handle 0 is valid (see GRAPHICS_LOAD_LIBRARIES), so the pair is freed
         ; on the loaded flag.  Both handles are always set together.
         LD      A, (GRAPHICS_LIBS_LOADED)
@@ -85,21 +93,18 @@ GRAPHICS_REUSE_UNET:
 .LOAD:  OR      1
         RET
 
-GRAPHICS_RENDER_FORECAST:
-        ; Keep startup and all network traffic independent from graphics
-        ; resource mapping. GRAPHICS_BOOT only rebuilds GFX's page list.
+; Load the graphical frontend once, then redraw its progress screen for every
+; retry without unloading the libraries or returning to text mode.
+GRAPHICS_BEGIN_ATTEMPT:
+        LD      A, (GRAPHICS_MODE_ACTIVE)
+        OR      A
+        JR      NZ, .STATUS
         CALL    GRAPHICS_BOOT
-        JR      C, .BOOT_FAIL
+        JR      C, .FAIL
         CALL    GRAPHICS_LOAD_LIBRARIES
-        RET     C
-        ; Compose the entire frame BEFORE switching the screen.  GFX320 renders
-        ; into VIDEO_PAGE through its own window, and GFX_TARGET_BUF0 takes
-        ; resolve_target's fixed path, which never reads RGMOD - so drawing does
-        ; not depend on the current video mode.  Doing it first means the screen
-        ; switches to a finished frame instead of a half-composed one.
-        CALL    GRAPHICS_DRAW
-        RET     C
-        ; Preserve desktop state and enter the sole graphics mode used here.
+        JR      C, .FAIL
+        CALL    GRAPHICS_LOAD_PALETTE
+        JR      C, .FAIL
         LD      C, DSS_GETVMOD
         RST     DSS
         LD      (GRAPHICS_OLD_MODE), A
@@ -109,11 +114,34 @@ GRAPHICS_RENDER_FORECAST:
         LD      A, DSS_VMOD_G320
         LD      C, DSS_SETVMOD
         RST     DSS
-        ; Never proceed on a failed mode switch: drawing 8bpp graphics through a
-        ; text-mode screen layout is how a stray write reaches whatever the text
-        ; mode has mapped there.
-        JR      C, .MODE_FAIL
+        JR      C, .FAIL
+        LD      A, 1
+        LD      (GRAPHICS_MODE_ACTIVE), A
+        LD      HL, MSG_GRAPHICS_STAGE
+        CALL    GRAPHICS_SHOW_STATUS_SCREEN
+        JR      C, .ACTIVE_FAIL
         CALL    GRAPHICS_FADE_IN
+        JR      C, .ACTIVE_FAIL
+        RET
+.STATUS:
+        LD      HL, MSG_GRAPHICS_STAGE
+        CALL    GRAPHICS_SHOW_STATUS_SCREEN
+        RET     NC
+.ACTIVE_FAIL:
+        CALL    GRAPHICS_RESTORE_MODE
+        XOR     A
+        LD      (GRAPHICS_MODE_ACTIVE), A
+.FAIL:
+        SCF
+        RET
+
+GRAPHICS_RENDER_FORECAST:
+        CALL    GRAPHICS_FADE_OUT
+        RET     C
+        CALL    GRAPHICS_DRAW
+        RET     C
+        CALL    GRAPHICS_FADE_IN
+        RET     C
         ; WAITKEY spins on the keyboard ring buffer, which only the 50 Hz
         ; handler refills.  Entering it with interrupts disabled hangs the
         ; machine outright, so never take the caller's IFF on trust here.
@@ -131,21 +159,10 @@ GRAPHICS_RENDER_FORECAST:
         CP      'r'
         JR      NZ, .WAIT
 .REFRESH:
-        CALL    GRAPHICS_FADE_OUT
-        CALL    GRAPHICS_RESTORE_MODE
         JP      ATTEMPT_START
-.EXIT:  CALL    GRAPHICS_FADE_OUT
-        CALL    GRAPHICS_RESTORE_MODE
+.EXIT:
         LD      B, EXIT_OK
         JP      EXIT_PROGRAM
-.MODE_FAIL:
-        SCF
-        RET
-.BOOT_FAIL:
-        LD      HL, MSG_GRAPHICS_BOOT_ERROR
-        CALL    PUTS_LN
-        SCF
-        RET
 
 GRAPHICS_LOAD_LIBRARIES:
         ; Not "is the handle zero": libman hands back a table index in L with
@@ -166,22 +183,22 @@ GRAPHICS_LOAD_LIBRARIES:
         ; reported code instead of a library left half-configured.
         LD      B, GFX_INIT
         CALL    LIBMAN.l_call
-        JR      C, .FAIL
+        JR      C, .FAIL_GFX
         OR      A
-        JR      NZ, .FAIL_STATUS
+        JR      NZ, .FAIL_GFX
         ; GFX320 copies the table into its own storage, so this consumes the
         ; list GRAPHICS_BOOT just collected in the borrowed config buffer.
         LD      DE, CFG_FILE_BUFFER
         LD      IX, GRAPHICS_ASSET_PAGES
         LD      B, GFX_SET_PAGE_TABLE
         CALL    LIBMAN.l_call
-        JR      C, .FAIL
+        JR      C, .FAIL_GFX
         OR      A
-        JR      NZ, .FAIL
+        JR      NZ, .FAIL_GFX
         LD      HL, AFNT_NAME
         LD      A, 1
         CALL    LIBMAN.l_load
-        JR      C, .FAIL
+        JR      C, .FAIL_GFX
         LD      (AFNT_HANDLE), HL
         LD      A, 1
         LD      (GRAPHICS_LIBS_LOADED), A
@@ -200,44 +217,146 @@ GRAPHICS_LOAD_LIBRARIES:
         JR      C, .FAIL
         XOR     A
         RET
-.FAIL_STATUS:
+.FAIL_GFX:
+        LD      HL, (GFX_HANDLE)
+        CALL    LIBMAN.l_free
 .FAIL:  SCF
         RET
 
-GRAPHICS_DRAW:
-        ; black first, then compose and fade the final palette in.
+; HL points to a CP866 ASCIIZ status/error message.
+; This full-screen form is used only when entering the progress state. Later
+; network transitions update the status band in place.
+GRAPHICS_SHOW_STATUS_SCREEN:
+        LD      DE, MSG_GRAPHICS_BUSY_HINT
+        LD      A, 0Eh
+        JR      GRAPHICS_SHOW_MESSAGE
+
+GRAPHICS_SHOW_STATUS:
+        PUSH    HL
+        CALL    GRAPHICS_CLEAR_STATUS
+        JR      C, .DROP_FAIL
+        POP     DE
+        LD      IX, 12
+        LD      IY, 92
+        LD      A, 0Eh
+        JP      GRAPHICS_PRINT
+.DROP_FAIL:
+        POP     HL
+        SCF
+        RET
+
+GRAPHICS_SHOW_ERROR:
+        PUSH    HL
+        LD      DE, MSG_GRAPHICS_HINT
+        LD      A, 0Ch
+        CALL    GRAPHICS_SHOW_MESSAGE
+        POP     HL
+        RET     NC
+        ; A graphics-library failure cannot itself be reported graphically.
+        ; Restore the DSS screen before using the sole permitted text fallback.
+GRAPHICS_ERROR_FALLBACK:
+        LD      A, (GRAPHICS_MODE_ACTIVE)
+        OR      A
+        JR      Z, .CONSOLE
+        CALL    GRAPHICS_RESTORE_MODE
+        XOR     A
+        LD      (GRAPHICS_MODE_ACTIVE), A
+.CONSOLE:
+        CALL    PUTS_LN
+        OR      A
+        RET
+
+GRAPHICS_SHOW_MESSAGE:
+        LD      (GRAPHICS_MESSAGE_COLOR), A
+        PUSH    DE
+        PUSH    HL
+        CALL    GRAPHICS_CLEAR
+        JR      C, .DROP_FAIL
+        LD      DE, MSG_GRAPHICS_TITLE
+        LD      IX, 12
+        LD      IY, 8
+        LD      A, 0Fh
+        CALL    GRAPHICS_PRINT
+        POP     DE
+        LD      IX, 12
+        LD      IY, 92
+        LD      A, (GRAPHICS_MESSAGE_COLOR)
+        CALL    GRAPHICS_PRINT
+        JR      C, .FOOTER_FAIL
+        POP     DE
+        LD      IX, 12
+        LD      IY, 238
+        LD      A, 07h
+        JP      GRAPHICS_PRINT
+.FOOTER_FAIL:
+        POP     DE
+        SCF
+        RET
+.DROP_FAIL:
+        POP     HL
+        POP     DE
+        SCF
+        RET
+
+; ATTEMPT_FINISH uses this for errors. If graphics initialization itself
+; failed, retain the console fallback because AFNT320 is unavailable.
+GRAPHICS_RENDER_PROMPT:
+        LD      A, (GRAPHICS_MODE_ACTIVE)
+        OR      A
+        JP      Z, TEXT_RENDER_PROMPT
+        LD      DE, MSG_GRAPHICS_HINT
+        LD      IX, 12
+        LD      IY, 238
+        LD      A, 07h
+        JP      GRAPHICS_PRINT
+
+GRAPHICS_CLEAR:
         LD      HL, (GFX_HANDLE)
         LD      A, 0
         LD      E, GFX_TARGET_BUF0
         LD      B, GFX_CLEAR
         CALL    LIBMAN.l_call
-        JP      C, .FAIL
+        RET     C
         OR      A
-        JP      NZ, .FAIL
-        ; The palette sits at GRAPHICS_PALETTE_OFFSET inside asset page 4 and
-        ; is mapped into WIN3: WIN0 is GFX320's tile source window, WIN1 is
-        ; where libman maps the DLL for every l_call, and WIN2 holds this
-        ; program and its stack.
-        ; gfx_palette_load256 copies its 768 bytes out before it opens the VRAM
-        ; window, and GFX320 saves/restores that window around every operation,
-        ; so the asset page may stay mapped here.
-        ;
-        ; SETWIN3 (#3B), not the generic SETWIN (#38): the latter treats H=0 as
-        ; an error and silently substitutes WIN1, which would page this program
-        ; out from under itself.
+        RET     Z
+        SCF
+        RET
+
+; Erase only the changing progress line. This avoids full-screen flashes
+; between CONNECT, SEND and RECV while keeping stale longer text invisible.
+GRAPHICS_CLEAR_STATUS:
+        LD      HL, (GFX_HANDLE)
+        LD      DE, GRAPHICS_STATUS_RECT
+        LD      B, GFX_FILL_RECT
+        CALL    LIBMAN.l_call
+        RET     C
+        OR      A
+        RET     Z
+        SCF
+        RET
+
+GRAPHICS_LOAD_PALETTE:
+        ; Palette page is ordinary asset memory. GFX320 copies all 768 bytes
+        ; before opening its VRAM window, so WIN3 may be reused by UNET later.
         LD      A, (ASSET_BLOCK)
         LD      B, GRAPHICS_PALETTE_PAGE
         LD      C, DSS_SETWIN3
         RST     DSS
-        JP      C, .FAIL
+        RET     C
         LD      HL, (GFX_HANDLE)
         LD      DE, 0C000h + GRAPHICS_PALETTE_OFFSET
         LD      A, GFX_PAL_BUFFER0
         LD      B, GFX_PALETTE_LOAD256
         CALL    LIBMAN.l_call
-        JP      C, .FAIL
+        RET     C
         OR      A
-        JP      NZ, .FAIL
+        RET     Z
+        SCF
+        RET
+
+GRAPHICS_DRAW:
+        CALL    GRAPHICS_CLEAR
+        JP      C, .FAIL
         CALL    GRAPHICS_DRAW_CURRENT_ICON
         JP      C, .FAIL
         CALL    GRAPHICS_DRAW_DAY_ICONS
@@ -764,4 +883,13 @@ GRAPHICS_RESTORE_MODE:
 
 GFX_NAME:               DB "GFX320.DLL",0
 AFNT_NAME:              DB "AFNT320.DLL",0
+GRAPHICS_STATUS_RECT:
+        DW      0                       ; x
+        DB      80                      ; y
+        DW      320                     ; width
+        DW      32                      ; height
+        DB      0                       ; black
+        DB      GFX_TARGET_BUF0         ; flags/target
+        DB      0, 0, 0                 ; reserved
+        ASSERT  $ - GRAPHICS_STATUS_RECT = GFX_FILL_RECT_SIZE
 DAY_ICON_X:             DW 8,60,112,164,216,268

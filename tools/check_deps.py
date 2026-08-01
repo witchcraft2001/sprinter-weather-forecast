@@ -16,11 +16,11 @@ ROOT = Path(__file__).resolve().parent.parent
 SUBMODULES = {
     "extern/esp_net": (
         "git@github.com:witchcraft2001/sprinter_net.git",
-        "019dbfeb8bbb38b6681d5a2634078057d24e4b0e",
+        "9b08bd4d1b3a2643471f80a17c0ac9a9aa3f20ec",
     ),
     "extern/rtl_net": (
         "git@github.com:witchcraft2001/sprinter-rtl8019a.git",
-        "68c6d45ab23899dfa3da4a9b594b3de9fb7f2c43",
+        "7c710357d56899d625d0ad052ef5bd673076723d",
     ),
     "extern/libman": (
         "git@github.com:witchcraft2001/sprinter-libman.git",
@@ -38,8 +38,8 @@ DLLS = {
         "f03352df4f4af42683d1fde4a8260d0bd3a55f51b1366f10b5467b38566e9abc",
     ),
     "extern/rtl_net/UNETRTL.DLL": (
-        13_651,
-        "051e53b1a4c10f3a41ddad8ad3f26dd974786ebd821c17f8202fb2d91b702fb1",
+        13_972,
+        "7f4bfbbb38d5363d6fc0dfc4a0f972fda5f04ac94dcc58dde9d569c21fc81b82",
     ),
 }
 

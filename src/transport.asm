@@ -32,7 +32,7 @@ GOPHER_FETCH:
 
         IFDEF WEATHER_GRAPHICS
         LD      HL, MSG_GRAPHICS_CONNECT
-        CALL    PUTS_LN
+        CALL    GRAPHICS_SHOW_STATUS
         ENDIF
         XOR     A
         LD      DE, CFG_HOST
@@ -48,7 +48,7 @@ GOPHER_FETCH:
 
         IFDEF WEATHER_GRAPHICS
         LD      HL, MSG_GRAPHICS_SENDING
-        CALL    PUTS_LN
+        CALL    GRAPHICS_SHOW_STATUS
         ENDIF
         XOR     A
         LD      DE, REQUEST_BUFFER
@@ -71,7 +71,7 @@ GOPHER_FETCH:
 .SEND_OK:
         IFDEF WEATHER_GRAPHICS
         LD      HL, MSG_GRAPHICS_SEND
-        CALL    PUTS_LN
+        CALL    GRAPHICS_SHOW_STATUS
         ENDIF
 .RECV_LOOP:
         XOR     A

@@ -1,9 +1,16 @@
 # Weather Forecast for Sprinter DSS
 
-Программа прогноза погоды для Sprinter DSS. Она читает
-необязательный `WEATHER.CFG`, выбирает UNET backend, получает и строго
-разбирает потоковый WX1, затем показывает текущую погоду и прогноз на семь
-дней через штатный текстовый вывод DSS.
+Версия 0.1.0.
+
+Weather Forecast — клиент прогноза погоды для Sprinter DSS. Он читает
+необязательный `WEATHER.CFG`, выбирает UNET backend, получает через Gopher и
+строго разбирает потоковый WX1. `WEATHER.EXE` показывает текущие условия и
+прогноз в графическом режиме 320×256 с погодными пиктограммами;
+`WEATHERC.EXE` предоставляет самостоятельный текстовый интерфейс.
+
+Автор: Dmitry Mikhalchenkov
+
+FidoNet: 2:5030/1997.10
 
 Поддерживаются CRLF, CR и LF ответы WX1, но один ответ обязан использовать
 только один тип окончания строки. `R`/Enter выполняют новый запрос с повторным
@@ -39,6 +46,7 @@ make debug-image
 
 Результаты:
 
+- `build/WEATHER.EXE`;
 - `build/WEATHERC.EXE`;
 - `distr/weather-forecast.zip`;
 - `distr/weather-forecast.img`.

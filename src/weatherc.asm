@@ -88,42 +88,44 @@ START:
         LD      (ASSET_ALLOCATED), A
         ENDIF
 
-        IFDEF WEATHER_GRAPHICS
-        LD      HL, MSG_GRAPHICS_BANNER
-        ELSE
+        IFNDEF WEATHER_GRAPHICS
         LD      HL, MSG_BANNER
-        ENDIF
         CALL    PUTS_LN
-        IFDEF WEATHER_GRAPHICS
-        LD      HL, MSG_GRAPHICS_STAGE
-        ELSE
         LD      HL, MSG_STAGE
-        ENDIF
         CALL    PUTS_LN
+        ENDIF
 ATTEMPT_START:
         CALL    ATTEMPT_RESET
+        IFDEF WEATHER_GRAPHICS
+        CALL    GRAPHICS_BEGIN_ATTEMPT
+        JP      C, ERROR_GRAPHICS_BOOT
+        ENDIF
         CALL    CONFIG_LOAD
         JP      C, ERROR_CONFIG_FILE
         LD      HL, (CFG_WARNING_LINE)
         LD      A, H
         OR      L
         JR      Z, .NO_CFG_WARNING
-        LD      HL, MSG_CONFIG_WARNING
-        CALL    PUTS
-        LD      A, (CFG_WARNING_LINE + 1)
-        CALL    PUT_HEX8
-        LD      A, (CFG_WARNING_LINE)
-        CALL    PUT_HEX8
-        CALL    CRLF
+        IFNDEF WEATHER_GRAPHICS
+          LD      HL, MSG_CONFIG_WARNING
+          CALL    PUTS
+          LD      A, (CFG_WARNING_LINE + 1)
+          CALL    PUT_HEX8
+          LD      A, (CFG_WARNING_LINE)
+          CALL    PUT_HEX8
+          CALL    CRLF
+        ENDIF
 .NO_CFG_WARNING:
 
         CALL    SELECT_BACKEND
         JP      C, ERROR_CONFIG
 
-        LD      HL, MSG_LOADING
-        CALL    PUTS
-        LD      HL, (DLL_NAME_PTR)
-        CALL    PUTS_LN
+        IFNDEF WEATHER_GRAPHICS
+          LD      HL, MSG_LOADING
+          CALL    PUTS
+          LD      HL, (DLL_NAME_PTR)
+          CALL    PUTS_LN
+        ENDIF
 
         IFDEF WEATHER_GRAPHICS
         CALL    GRAPHICS_REUSE_UNET
@@ -146,10 +148,12 @@ ATTEMPT_START:
         CALL    VALIDATE_DLL_INFO
         JP      C, ERROR_INFO_NAME
 
-        LD      HL, MSG_DLL
-        CALL    PUTS
-        LD      HL, DLL_INFO + 16
-        CALL    PUTS_LN
+        IFNDEF WEATHER_GRAPHICS
+          LD      HL, MSG_DLL
+          CALL    PUTS
+          LD      HL, DLL_INFO + 16
+          CALL    PUTS_LN
+        ENDIF
 
         LD      B, UNET_FN_GETCAPS
         CALL    CALL_UNET
@@ -204,12 +208,17 @@ UNET_READY:
         OR      FLAG_NET_INITIALIZED
         LD      (STATE_FLAGS), A
 
-        LD      HL, MSG_READY
-        CALL    PUTS
-        LD      HL, DLL_INFO + 16
-        CALL    PUTS_LN
-        LD      HL, MSG_LOADING_WEATHER
-        CALL    PUTS_LN
+        IFDEF WEATHER_GRAPHICS
+          LD      HL, MSG_LOADING_WEATHER
+          CALL    GRAPHICS_SHOW_STATUS
+        ELSE
+          LD      HL, MSG_READY
+          CALL    PUTS
+          LD      HL, DLL_INFO + 16
+          CALL    PUTS_LN
+          LD      HL, MSG_LOADING_WEATHER
+          CALL    PUTS_LN
+        ENDIF
 
         CALL    GOPHER_FETCH
         JP      C, ERROR_TRANSPORT
@@ -225,6 +234,7 @@ UNET_READY:
         JP      NZ, ERROR_WX1
         IFDEF WEATHER_GRAPHICS
         CALL    GRAPHICS_RENDER_FORECAST
+        JP      C, ERROR_GRAPHICS_RENDER
         ELSE
         CALL    TEXT_RENDER_FORECAST
         ENDIF
@@ -262,10 +272,12 @@ SELECT_BACKEND:
         CALL    STREQ
         JR      Z, .RTL
 
-        LD      HL, MSG_NET_UNKNOWN
-        CALL    PUTS
-        LD      HL, ENV_VALUE
-        CALL    PUTS_LN
+        IFNDEF WEATHER_GRAPHICS
+          LD      HL, MSG_NET_UNKNOWN
+          CALL    PUTS
+          LD      HL, ENV_VALUE
+          CALL    PUTS_LN
+        ENDIF
         SCF
         RET
 
@@ -274,8 +286,10 @@ SELECT_BACKEND:
         LD      (BACKEND), A
         LD      HL, DLL_ESP
         LD      (DLL_NAME_PTR), HL
-        LD      HL, MSG_BACKEND_WIFI
-        CALL    PUTS_LN
+        IFNDEF WEATHER_GRAPHICS
+          LD      HL, MSG_BACKEND_WIFI
+          CALL    PUTS_LN
+        ENDIF
         OR      A
         RET
 
@@ -284,8 +298,10 @@ SELECT_BACKEND:
         LD      (BACKEND), A
         LD      HL, DLL_RTL
         LD      (DLL_NAME_PTR), HL
-        LD      HL, MSG_BACKEND_RTL
-        CALL    PUTS_LN
+        IFNDEF WEATHER_GRAPHICS
+          LD      HL, MSG_BACKEND_RTL
+          CALL    PUTS_LN
+        ENDIF
         OR      A
         RET
 
@@ -343,14 +359,23 @@ VALIDATE_DLL_INFO:
 ; ---------------------------------------------------------------------------
 ERROR_CONFIG:
         CALL    CLEANUP
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_NET_NOT_CONFIGURED
+        CALL    GRAPHICS_SHOW_ERROR
+        ELSE
         LD      HL, MSG_NET_NOT_CONFIGURED
         CALL    PUTS_LN
         CALL    PRINT_CONFIG_HINT
+        ENDIF
         LD      B, EXIT_CONFIG
         JP      ATTEMPT_FINISH
 
 ERROR_CONFIG_FILE:
         CALL    CLEANUP
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_GRAPHICS_CONFIG_ERROR
+        CALL    GRAPHICS_SHOW_ERROR
+        ELSE
         LD      HL, MSG_CONFIG_ERROR
         CALL    PUTS
         LD      A, (CFG_ERROR_LINE + 1)
@@ -362,11 +387,16 @@ ERROR_CONFIG_FILE:
         LD      A, (CFG_ERROR_CODE)
         CALL    PUT_HEX8
         CALL    CRLF
+        ENDIF
         LD      B, EXIT_CONFIG
         JP      ATTEMPT_FINISH
 
 ERROR_LOAD:
         CALL    CLEANUP
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_GRAPHICS_DLL_ERROR
+        CALL    GRAPHICS_SHOW_ERROR
+        ELSE
         LD      HL, MSG_LOAD_ERROR
         CALL    PUTS
         LD      HL, (DLL_NAME_PTR)
@@ -390,46 +420,69 @@ ERROR_LOAD:
         CALL    CRLF
         LD      HL, MSG_DLL_HINT
         CALL    PUTS_LN
+        ENDIF
         LD      B, EXIT_DLL
         JP      ATTEMPT_FINISH
 
 ERROR_INFO:
         CALL    CLEANUP
         LD      HL, MSG_INFO_ERROR
+        IFDEF WEATHER_GRAPHICS
+        CALL    GRAPHICS_SHOW_ERROR
+        ELSE
         CALL    PUTS_LN
+        ENDIF
         LD      B, EXIT_DLL
         JP      ATTEMPT_FINISH
 
 ERROR_INFO_NAME:
         CALL    CLEANUP
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_GRAPHICS_DLL_ERROR
+        CALL    GRAPHICS_SHOW_ERROR
+        ELSE
         LD      HL, MSG_INFO_NAME_ERROR
         CALL    PUTS
         LD      HL, DLL_INFO + 16
         CALL    PUTS_LN
+        ENDIF
         LD      B, EXIT_DLL
         JP      ATTEMPT_FINISH
 
 ERROR_ABI:
         CALL    CLEANUP
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_GRAPHICS_ABI_ERROR
+        CALL    GRAPHICS_SHOW_ERROR
+        ELSE
         LD      HL, MSG_ABI_ERROR
         CALL    PUTS
         LD      DE, (UNET_ABI)
         CALL    PUT_HEX16
         CALL    CRLF
+        ENDIF
         LD      B, EXIT_DLL
         JP      ATTEMPT_FINISH
 
 ERROR_TCP_CAP:
         CALL    CLEANUP
         LD      HL, MSG_TCP_ERROR
+        IFDEF WEATHER_GRAPHICS
+        CALL    GRAPHICS_SHOW_ERROR
+        ELSE
         CALL    PUTS_LN
+        ENDIF
         LD      B, EXIT_DLL
         JP      ATTEMPT_FINISH
 
 ERROR_CALL:
         CALL    CLEANUP
         LD      HL, MSG_CALL_ERROR
+        IFDEF WEATHER_GRAPHICS
+        CALL    GRAPHICS_SHOW_ERROR
+        ELSE
         CALL    PUTS_LN
+        ENDIF
         LD      B, EXIT_DLL
         JP      ATTEMPT_FINISH
 
@@ -438,11 +491,16 @@ ERROR_UNET_STATUS:
         CALL    CLEANUP
         POP     AF
         LD      (LAST_UNET_STATUS), A
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_GRAPHICS_UNET_ERROR
+        CALL    GRAPHICS_SHOW_ERROR
+        ELSE
         LD      HL, MSG_UNET_ERROR
         CALL    PUTS
         LD      A, (LAST_UNET_STATUS)
         CALL    PUT_HEX8
         CALL    CRLF
+        ENDIF
         LD      B, EXIT_NETWORK
         JP      ATTEMPT_FINISH
 
@@ -451,6 +509,33 @@ ERROR_NETINIT:
         CALL    CLEANUP
         POP     AF
         LD      (LAST_UNET_STATUS), A
+        IFDEF WEATHER_GRAPHICS
+        CP      NERR_NONET
+        JR      Z, .G_CONFIG
+        CP      NERR_HW
+        JR      Z, .G_HARDWARE
+        CP      NERR_BUSY
+        JR      Z, .G_BUSY
+        LD      HL, MSG_GRAPHICS_NETINIT_ERROR
+        CALL    GRAPHICS_SHOW_ERROR
+        LD      B, EXIT_NETWORK
+        JP      ATTEMPT_FINISH
+.G_CONFIG:
+        LD      HL, MSG_BACKEND_NOT_CONFIGURED
+        CALL    GRAPHICS_SHOW_ERROR
+        LD      B, EXIT_CONFIG
+        JP      ATTEMPT_FINISH
+.G_HARDWARE:
+        LD      HL, MSG_HARDWARE_ERROR
+        CALL    GRAPHICS_SHOW_ERROR
+        LD      B, EXIT_DLL
+        JP      ATTEMPT_FINISH
+.G_BUSY:
+        LD      HL, MSG_BUSY_ERROR
+        CALL    GRAPHICS_SHOW_ERROR
+        LD      B, EXIT_NETWORK
+        JP      ATTEMPT_FINISH
+        ELSE
         CP      NERR_NONET
         JR      Z, .CONFIG
         CP      NERR_HW
@@ -485,9 +570,16 @@ ERROR_NETINIT:
         CALL    PUTS_LN
         LD      B, EXIT_NETWORK
         JP      ATTEMPT_FINISH
+        ENDIF
 
 ERROR_TRANSPORT:
         CALL    CLEANUP
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_TRANSPORT_ERROR
+        CALL    GRAPHICS_SHOW_ERROR
+        LD      B, EXIT_TRANSPORT
+        JP      ATTEMPT_FINISH
+        ELSE
         LD      A, (TRANSPORT_STAGE)
         CP      TST_RESPONSE
         JR      NZ, .TRANSPORT
@@ -544,16 +636,50 @@ ERROR_TRANSPORT:
         ENDIF
         LD      B, EXIT_TRANSPORT
         JP      ATTEMPT_FINISH
+        ENDIF
 
 ERROR_SERVICE:
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_GRAPHICS_SERVICE_ERROR
+        CALL    GRAPHICS_SHOW_ERROR
+        ELSE
         CALL    TEXT_RENDER_SERVICE_ERROR
+        ENDIF
         LD      B, EXIT_TRANSPORT
         JP      ATTEMPT_FINISH
 
 ERROR_WX1:
+        IFDEF WEATHER_GRAPHICS
+        LD      HL, MSG_WX1_ERROR
+        CALL    GRAPHICS_SHOW_ERROR
+        ELSE
         CALL    TEXT_RENDER_WX1_ERROR
+        ENDIF
         LD      B, EXIT_TRANSPORT
         JP      ATTEMPT_FINISH
+
+        IFDEF WEATHER_GRAPHICS
+ERROR_GRAPHICS_RENDER:
+        LD      HL, MSG_GRAPHICS_RENDER_ERROR
+        CALL    GRAPHICS_SHOW_ERROR
+        LD      A, (GRAPHICS_MODE_ACTIVE)
+        OR      A
+        JR      Z, .READY
+        CALL    GRAPHICS_FADE_IN
+        JR      NC, .READY
+        LD      HL, MSG_GRAPHICS_RENDER_ERROR
+        CALL    GRAPHICS_ERROR_FALLBACK
+.READY:
+        LD      B, EXIT_DLL
+        JP      ATTEMPT_FINISH
+
+ERROR_GRAPHICS_BOOT:
+        ; Without GFX320/AFNT320 there is no graphical error path available.
+        LD      HL, MSG_GRAPHICS_BOOT_ERROR
+        CALL    PUTS_LN
+        LD      B, EXIT_DLL
+        JP      ATTEMPT_FINISH
+        ENDIF
 
 PRINT_CONFIG_HINT:
         LD      A, (BACKEND)
@@ -589,8 +715,8 @@ ATTEMPT_RESET:
         XOR     A
         LD      (BACKEND), A
         IFDEF WEATHER_GRAPHICS
-        ; A validated UNET handle remains mapped by libman in WIN2 between
-        ; refreshes.  It is replaced only when NET changes backend.
+        ; A validated UNET handle remains in the libman table between
+        ; refreshes. It is replaced only when NET changes backend.
         LD      (DLL_NAME_PTR), A
         LD      (DLL_NAME_PTR + 1), A
         LD      (LAST_UNET_STATUS), A
@@ -613,7 +739,11 @@ ATTEMPT_FINISH:
         LD      A, B
         LD      (LAST_ATTEMPT_EXIT), A
         CALL    CLEANUP
+        IFDEF WEATHER_GRAPHICS
+        CALL    GRAPHICS_RENDER_PROMPT
+        ELSE
         CALL    TEXT_RENDER_PROMPT
+        ENDIF
 .WAIT:
         LD      C, DSS_KCLEAR
         RST     DSS
@@ -924,7 +1054,9 @@ AFNT_HANDLE     EQU GFX_HANDLE + 2
 GRAPHICS_LIBS_LOADED EQU AFNT_HANDLE + 2
 GRAPHICS_OLD_MODE EQU GRAPHICS_LIBS_LOADED + 1
 GRAPHICS_OLD_SCREEN EQU GRAPHICS_OLD_MODE + 1
-GRAPHICS_NUMBER EQU GRAPHICS_OLD_SCREEN + 1
+GRAPHICS_MODE_ACTIVE EQU GRAPHICS_OLD_SCREEN + 1
+GRAPHICS_MESSAGE_COLOR EQU GRAPHICS_MODE_ACTIVE + 1
+GRAPHICS_NUMBER EQU GRAPHICS_MESSAGE_COLOR + 1
 ; Longest formatted value is "-100.0 C" plus NUL.
 GRAPHICS_TILE_REFS EQU GRAPHICS_NUMBER + 9
 GRAPHICS_TILE_LEFT EQU GRAPHICS_TILE_REFS + 2

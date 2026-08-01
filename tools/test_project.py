@@ -15,7 +15,7 @@ BUILD = ROOT / "build"
 
 EXPECTED_DLLS = {
     "UNETESP.DLL": "f03352df4f4af42683d1fde4a8260d0bd3a55f51b1366f10b5467b38566e9abc",
-    "UNETRTL.DLL": "051e53b1a4c10f3a41ddad8ad3f26dd974786ebd821c17f8202fb2d91b702fb1",
+    "UNETRTL.DLL": "7f4bfbbb38d5363d6fc0dfc4a0f972fda5f04ac94dcc58dde9d569c21fc81b82",
 }
 
 
@@ -128,10 +128,53 @@ def check_source_contract() -> None:
         and "L_TRAMPOLINE" in loader_source,
         "primary loader must own WFG2, Hrust and the WIN2 handoff",
     )
+    banner = 'Weather Forecast v.0.1.0 by Dmitry Mikhalchenkov.'
+    require(
+        banner in loader_source
+        and "LD      HL, L_BANNER\n        LD      C, DSS_PCHARS\n        RST     DSS"
+        in loader_source
+        and loader_source.index("LD      HL, L_BANNER")
+        < loader_source.index("CALL    L_READ_EXACT"),
+        "primary loader must print the version/author banner before WFG2 loading",
+    )
+    distribution_readme = (ROOT / "resources" / "README.ru.txt").read_text(
+        encoding="utf-8"
+    )
+    for identity in ("Dmitry Mikhalchenkov", "2:5030/1997.10"):
+        require(
+            identity in distribution_readme,
+            f"distribution description is missing author identity: {identity}",
+        )
+    for config_detail in (
+        "HOST=go.sprinter.ru",
+        "PORT=70",
+        "SELECTOR=/weather/zx",
+        "LOCATION=Almaty,KZ",
+        "NET=WIFI",
+        "NET=RTL",
+    ):
+        require(
+            config_detail in distribution_readme,
+            f"distribution description is missing WEATHER.CFG detail: {config_detail}",
+        )
     require(
         (ROOT / "src" / "hrust_depack.asm").is_file()
         and (ROOT / "tests" / "z80" / "t_hrust.asm").is_file(),
         "the loader depacker and its Z80 harness are required",
+    )
+    require(
+        (ROOT / "tests" / "z80" / "t_config.asm").is_file()
+        and "Z80 config harness" in (ROOT / "tools" / "run_z80_tests.sh").read_text(
+            encoding="utf-8"
+        ),
+        "the WEATHER.CFG parser needs its Z80 regression harness",
+    )
+    config_source = (ROOT / "src" / "config.asm").read_text(encoding="utf-8")
+    require(
+        "LD      HL, (CFG_FILE_SIZE)\n        OR      A\n"
+        "        SBC     HL, DE\n        JR      NZ, .READ_ERROR"
+        in config_source,
+        "WEATHER.CFG loading must reject a short DSS read",
     )
     require(
         "CALL    L_READ_EXACT" in loader_source
@@ -193,6 +236,56 @@ def check_source_contract() -> None:
     require(
         "GRAPHICS_LIBS_LOADED" in graphics_ui_source + weather_source,
         "the DLL pair needs a load flag distinct from the handle values",
+    )
+    attempt_start = weather_source[
+        weather_source.index("ATTEMPT_START:") : weather_source.index(
+            "CALL    CONFIG_LOAD", weather_source.index("ATTEMPT_START:")
+        )
+    ]
+    require(
+        "CALL    GRAPHICS_BEGIN_ATTEMPT" in attempt_start,
+        "WEATHER.EXE must enter graphics mode before reading CFG or starting UNET",
+    )
+    for label in (
+        "MSG_GRAPHICS_STAGE",
+        "MSG_LOADING_WEATHER",
+        "MSG_GRAPHICS_CONNECT",
+        "MSG_GRAPHICS_SENDING",
+        "MSG_GRAPHICS_SEND",
+    ):
+        marker = f"LD      HL, {label}"
+        marker_pos = source.find(marker)
+        require(
+            marker_pos >= 0
+            and "GRAPHICS_SHOW_STATUS" in source[marker_pos : marker_pos + 120],
+            f"graphical progress state is missing: {label}",
+        )
+    require(
+        "GRAPHICS_SHOW_ERROR:" in graphics_ui_source
+        and "CALL    GRAPHICS_RESTORE_MODE" in graphics_ui_source
+        and "LD      (GRAPHICS_MODE_ACTIVE), A" in graphics_ui_source,
+        "graphical errors need a controlled text fallback when GFX/AFNT fails",
+    )
+    status_update = graphics_ui_source[
+        graphics_ui_source.index("GRAPHICS_SHOW_STATUS:") : graphics_ui_source.index(
+            "GRAPHICS_SHOW_ERROR:"
+        )
+    ]
+    require(
+        "CALL    GRAPHICS_CLEAR_STATUS" in status_update
+        and "CALL    GRAPHICS_CLEAR\n" not in status_update
+        and "GRAPHICS_SHOW_STATUS_SCREEN" in graphics_ui_source,
+        "network progress transitions must redraw only the local status band",
+    )
+    require(
+        "LD      DE, GRAPHICS_STATUS_RECT\n        LD      B, GFX_FILL_RECT"
+        in graphics_ui_source,
+        "the local status update must use GFX320 fill-rect acceleration",
+    )
+    require(
+        ".FAIL_GFX:\n        LD      HL, (GFX_HANDLE)\n        CALL    LIBMAN.l_free"
+        in graphics_ui_source,
+        "a partial GFX320/AFNT320 load must release the GFX libman handle",
     )
     for token in ("GRAPHICS_MARK", "GRAPHICS_REPORT_FAIL", "DSS_PUTCHAR"):
         require(

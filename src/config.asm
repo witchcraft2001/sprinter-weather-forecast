@@ -89,6 +89,10 @@ CONFIG_LOAD:
         LD      C, DSS_READ_FILE
         RST     DSS
         JR      C, .READ_ERROR
+        LD      HL, (CFG_FILE_SIZE)
+        OR      A
+        SBC     HL, DE
+        JR      NZ, .READ_ERROR
 .CLOSE_PARSE:
         CALL    CFG_CLOSE
         JR      C, .CLOSE_ERROR
@@ -228,10 +232,21 @@ CFG_PARSE_FILE:
         JR      C, .LINE_ERROR
         JR      .BYTE
 .FLUSH:
+        ; CFG_PROCESS_LINE uses HL/BC internally. The streaming file loop owns
+        ; both registers (cursor and bytes left), so retain them across parsing
+        ; and line-number maintenance.
+        PUSH    HL
+        PUSH    BC
         CALL    CFG_PROCESS_LINE
-        RET     C
+        JR      C, .FLUSH_ERROR
         CALL    CFG_NEXT_LINE
+        POP     BC
+        POP     HL
         JR      .BYTE
+.FLUSH_ERROR:
+        POP     BC
+        POP     HL
+        RET
 .EOF:
         LD      A, (CFG_LINE_LEN)
         OR      A

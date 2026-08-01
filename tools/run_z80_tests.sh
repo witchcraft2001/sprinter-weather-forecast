@@ -27,6 +27,24 @@ byte_at() { byte_at_file "$dump" "$1"; }
 }
 echo "Z80 response harness: OK"
 
+config_bin="$build_dir/t_config.bin"
+config_dump="$build_dir/t_config.out"
+sjasmplus --nologo --fullpath -I "$repo_root/src" -I "$repo_root/tests/z80" \
+  --raw="$config_bin" "$repo_root/tests/z80/t_config.asm"
+rm -f "$config_dump"
+"$ticks" -pc 0 -counter 2000000 -output "$config_dump" "$config_bin" >/dev/null 2>&1 || true
+[[ -f "$config_dump" ]] || { echo "FAIL z80 config harness: no memory dump" >&2; exit 1; }
+[[ "$(byte_at_file "$config_dump" 57345)" == "165" ]] || {
+  echo "FAIL z80 config harness: incomplete" >&2
+  exit 1
+}
+[[ "$(byte_at_file "$config_dump" 57344)" == "0" ]] || {
+  echo "FAIL z80 config harness: assertion $(byte_at_file "$config_dump" 57346)," \
+    "failures=$(byte_at_file "$config_dump" 57347)" >&2
+  exit 1
+}
+echo "Z80 config harness: OK (LF, CRLF, no-EOL and multiline)"
+
 assets="$repo_root/build/generated/weather_assets"
 # Regenerate the streams unconditionally: a stale .hst next to modified .bin
 # artwork would otherwise look like a depacker regression.
