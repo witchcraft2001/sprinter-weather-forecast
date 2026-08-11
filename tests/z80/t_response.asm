@@ -21,6 +21,7 @@ TRANSPORT_DETAIL        EQU TRANSPORT_DETAIL_STATUS + 1
 TRANSPORT_DETAIL_SIZE   EQU 32
 LAST_RECV_LENGTH        EQU TRANSPORT_DETAIL + TRANSPORT_DETAIL_SIZE
 TRANSPORT_RESPONSE_SIZE EQU LAST_RECV_LENGTH + 2
+TEST_SPLIT              EQU 09A00h
 WX1_LINE_BUFFER         EQU 08200h
 WX1_LINE_LEN            EQU WX1_LINE_BUFFER + 160
 WX1_STATE               EQU WX1_LINE_LEN + 1
@@ -70,6 +71,7 @@ START:
         CALL    T_BEGIN
         CALL    TEST_NUMBERS
         CALL    TEST_WHOLE_RESPONSE
+        CALL    TEST_ALL_TWO_CHUNK_SPLITS
         CALL    TEST_SEVEN_DAY_BYTEWISE
         CALL    TEST_SERVICE_ERROR
         CALL    TEST_TERMINATOR_BYTEWISE
@@ -135,6 +137,49 @@ TEST_WHOLE_RESPONSE:
         SBC     HL, DE
         LD      A, 5
         CALL    T_EXPECT_Z
+        RET
+
+; Exercise every possible boundary between two RECV chunks for one complete
+; response. Together with the bytewise fixture this guards both coalescing and
+; arbitrary transport splits without a host-side parser reimplementation.
+TEST_ALL_TWO_CHUNK_SPLITS:
+        LD      A, 1
+.NEXT_SPLIT:
+        LD      (TEST_SPLIT), A
+        CALL    RESET_RESPONSE
+        LD      A, (TEST_SPLIT)
+        LD      C, A
+        LD      B, 0
+        LD      HL, FIXTURE_CRLF
+        CALL    MAIN.RESPONSE_FEED
+        LD      A, 6
+        CALL    T_EXPECT_NC
+
+        LD      A, (TEST_SPLIT)
+        LD      C, A
+        LD      B, 0
+        LD      HL, FIXTURE_CRLF
+        ADD     HL, BC
+        LD      A, FIXTURE_CRLF_END - FIXTURE_CRLF
+        SUB     C
+        LD      C, A
+        LD      B, 0
+        CALL    MAIN.RESPONSE_FEED
+        LD      A, 7
+        CALL    T_EXPECT_NC
+        LD      A, (WX1_RESULT)
+        CP      MAIN.WX1_OK
+        LD      A, 8
+        CALL    T_EXPECT_Z
+        LD      A, (WX1_MODEL)
+        CP      1
+        LD      A, 9
+        CALL    T_EXPECT_Z
+
+        LD      A, (TEST_SPLIT)
+        INC     A
+        CP      FIXTURE_CRLF_END - FIXTURE_CRLF
+        JR      C, .NEXT_SPLIT
         RET
 
 TEST_SEVEN_DAY_BYTEWISE:

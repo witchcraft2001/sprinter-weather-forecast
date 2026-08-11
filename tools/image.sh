@@ -25,6 +25,7 @@ cp "$repo_root/build/AFNT320.DLL" "$stage/AFNT320.DLL"
 cp "$repo_root/build/GFX320.DLL" "$stage/GFX320.DLL"
 cp "$repo_root/build/UNETESP.DLL" "$stage/UNETESP.DLL"
 cp "$repo_root/build/UNETRTL.DLL" "$stage/UNETRTL.DLL"
+cp "$repo_root/resources/WEATHER.CFG.sample" "$stage/WEATHER.SMP"
 sed 's/$/'$'\r''/' "$repo_root/resources/README.ru.txt" |
   iconv -f UTF-8 -t CP866 > "$stage/README.TXT"
 

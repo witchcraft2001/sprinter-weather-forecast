@@ -62,6 +62,9 @@ def check_source_contract() -> None:
     weather_source = (ROOT / "src" / "weatherc.asm").read_text(encoding="utf-8")
     graphics_ui_source = (ROOT / "src" / "graphics_ui.asm").read_text(encoding="utf-8")
     loader_source = (ROOT / "src" / "weather_loader.asm").read_text(encoding="utf-8")
+    message_catalogue = json.loads(
+        (ROOT / "resources/messages.json").read_text(encoding="utf-8")
+    )
     loader_page_loop = loader_source[
         loader_source.index(".PAGE:") : loader_source.index(
             "LD      A, (L_FILE_HANDLE)", loader_source.index(".PAGE:")
@@ -330,9 +333,54 @@ def check_source_contract() -> None:
         "location and country must be composed into one variable-width string",
     )
     require(
-        "CALL    GRAPHICS_APPEND_CELSIUS" in graphics_ui_source
+        "LD      HL, MSG_CELSIUS\n        CALL    GRAPHICS_BUFFER_APPEND"
+        in graphics_ui_source
         and "LD      IX, 161" not in graphics_ui_source,
         "the Celsius unit must be appended to the formatted temperature",
+    )
+    for token in (
+        "GRAPHICS_BUFFER_APPEND_DATE_TIME",
+        "GRAPHICS_WMO_DESCRIPTION",
+        "WC_APPARENT",
+        "WC_HUMIDITY",
+        "WC_WIND",
+        "WC_DIRECTION",
+        "WD_PRECIPITATION",
+        "GRAPHICS_FORMAT_DAY_LABEL",
+        "MSG_GRAPHICS_BACKEND_WIFI",
+        "MSG_GRAPHICS_BACKEND_RTL",
+        "GRAPHICS_SHOW_HELP",
+        "MSG_GRAPHICS_HELP_VERSION",
+        "MSG_GRAPHICS_HELP_AUTHOR",
+        "MSG_GRAPHICS_HELP_BACKEND_ESP",
+        "MSG_GRAPHICS_HELP_BACKEND_RTL",
+        "LD      A, (LOADED_BACKEND)",
+        "CP      3Bh",
+    ):
+        require(token in graphics_ui_source, f"final graphical layout is missing: {token}")
+    help_source = graphics_ui_source[
+        graphics_ui_source.index("GRAPHICS_SHOW_HELP:") : graphics_ui_source.index(
+            "; ATTEMPT_FINISH uses this for errors."
+        )
+    ]
+    require(
+        help_source.count("CALL    GRAPHICS_FADE_OUT") == 2
+        and help_source.count("CALL    GRAPHICS_FADE_IN") == 1
+        and "JP      GRAPHICS_FADE_IN" in help_source,
+        "help must fade both into and out of the forecast screen",
+    )
+    require(
+        "2:5030/1997.10" in message_catalogue["MSG_GRAPHICS_HELP_AUTHOR"]
+        and "MSG_GRAPHICS_HELP_4" not in message_catalogue,
+        "help must show the FidoNet address and omit the configuration hint",
+    )
+    require(
+        "LD      HL, WX1_MODEL + WM_DAYS\n"
+        "        LD      (GRAPHICS_TODAY_MODEL_PTR), HL\n"
+        "        LD      DE, WM_DAY_SIZE\n"
+        "        ADD     HL, DE\n"
+        "        LD      (GRAPHICS_DAY_BASE), HL" in graphics_ui_source,
+        "the first daily record must feed the current block, not a future card",
     )
     require("ANTONFNT" not in source, "runtime must not reference legacy ANTONFNT")
     require(
@@ -369,9 +417,19 @@ def check_zip_if_present() -> None:
         return
     with zipfile.ZipFile(archive) as package:
         names = sorted(package.namelist())
+        sample = package.read("WEATHER.SMP")
     require(
-        names == ["AFNT320.DLL", "GFX320.DLL", "README.TXT", "UNETESP.DLL", "UNETRTL.DLL", "WEATHER.EXE", "WEATHERC.EXE"],
+        all("/" not in name and len(name.split(".")[0]) <= 8 and len(name.rsplit(".", 1)[-1]) <= 3 for name in names),
+        f"ZIP contains a directory or a non-8.3 name: {names}",
+    )
+    require(
+        names == ["AFNT320.DLL", "GFX320.DLL", "README.TXT", "UNETESP.DLL", "UNETRTL.DLL", "WEATHER.EXE", "WEATHER.SMP", "WEATHERC.EXE"],
         f"unexpected ZIP contents: {names}",
+    )
+    require(
+        "WEATHER.CFG" not in names
+        and sample == (ROOT / "resources/WEATHER.CFG.sample").read_bytes(),
+        "ZIP must contain the untouched WEATHER.SMP template, never an active WEATHER.CFG",
     )
 
 

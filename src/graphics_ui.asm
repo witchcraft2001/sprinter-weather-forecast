@@ -150,6 +150,16 @@ GRAPHICS_RENDER_FORECAST:
         RST     DSS
         LD      C, DSS_WAITKEY
         RST     DSS
+        OR      A
+        JR      NZ, .ASCII
+        LD      A, D                    ; extended key position code
+        AND     7Fh
+        CP      3Bh                     ; F1, verified against DSS key table
+        JR      NZ, .WAIT
+        CALL    GRAPHICS_SHOW_HELP
+        RET     C
+        JR      .WAIT
+.ASCII:
         CP      27
         JR      Z, .EXIT
         CP      13
@@ -298,6 +308,58 @@ GRAPHICS_SHOW_MESSAGE:
         SCF
         RET
 
+; Full-screen help is intentionally self-contained and returns to the already
+; validated forecast without touching CFG, UNET or the model.
+GRAPHICS_SHOW_HELP:
+        CALL    GRAPHICS_FADE_OUT
+        RET     C
+        CALL    GRAPHICS_CLEAR
+        RET     C
+        CALL    GRAPHICS_BUFFER_START
+        LD      HL, MSG_GRAPHICS_HELP_VERSION
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      A, (LOADED_BACKEND)
+        CP      BACKEND_WIFI
+        LD      HL, MSG_GRAPHICS_HELP_BACKEND_ESP
+        JR      Z, .VERSION_BACKEND
+        LD      HL, MSG_GRAPHICS_HELP_BACKEND_RTL
+.VERSION_BACKEND:
+        CALL    GRAPHICS_BUFFER_APPEND
+        CALL    GRAPHICS_BUFFER_DONE
+        LD      HL, GRAPHICS_HELP_LINES
+        LD      (GRAPHICS_DAY_MODEL_PTR), HL
+        LD      A, 6
+        LD      (GRAPHICS_DAY_LEFT), A
+        LD      IY, 12
+.LINE:
+        LD      HL, (GRAPHICS_DAY_MODEL_PTR)
+        LD      E, (HL)
+        INC     HL
+        LD      D, (HL)
+        INC     HL
+        LD      (GRAPHICS_DAY_MODEL_PTR), HL
+        LD      IX, 12
+        LD      A, 0Fh
+        PUSH    IY
+        CALL    GRAPHICS_PRINT
+        POP     IY
+        RET     C
+        LD      DE, 28
+        ADD     IY, DE
+        LD      A, (GRAPHICS_DAY_LEFT)
+        DEC     A
+        LD      (GRAPHICS_DAY_LEFT), A
+        JR      NZ, .LINE
+        CALL    GRAPHICS_FADE_IN
+        RET     C
+        LD      C, DSS_WAITKEY
+        RST     DSS
+        CALL    GRAPHICS_FADE_OUT
+        RET     C
+        CALL    GRAPHICS_DRAW
+        RET     C
+        JP      GRAPHICS_FADE_IN
+
 ; ATTEMPT_FINISH uses this for errors. If graphics initialization itself
 ; failed, retain the console fallback because AFNT320 is unavailable.
 GRAPHICS_RENDER_PROMPT:
@@ -357,44 +419,198 @@ GRAPHICS_LOAD_PALETTE:
 GRAPHICS_DRAW:
         CALL    GRAPHICS_CLEAR
         JP      C, .FAIL
+        CALL    GRAPHICS_PREPARE_DAYS
         CALL    GRAPHICS_DRAW_CURRENT_ICON
         JP      C, .FAIL
         CALL    GRAPHICS_DRAW_DAY_ICONS
         JP      C, .FAIL
         CALL    GRAPHICS_DRAW_DAY_VALUES
-        LD      DE, MSG_GRAPHICS_TITLE
-        LD      IX, 12
-        LD      IY, 8
-        LD      A, 0Fh
-        CALL    GRAPHICS_PRINT
-        CALL    GRAPHICS_FORMAT_LOCATION
-        LD      DE, CFG_FILE_BUFFER
-        LD      IX, 12
-        LD      IY, 28
-        LD      A, 0Eh
-        CALL    GRAPHICS_PRINT
-        LD      DE, MSG_GRAPHICS_NOW
-        LD      IX, 100
-        LD      IY, 61
-        LD      A, 0Bh
-        CALL    GRAPHICS_PRINT
-        LD      DE, (WX1_MODEL + WM_CURRENT + WC_TEMPERATURE)
-        LD      IX, 100
-        LD      IY, 80
-        CALL    GRAPHICS_FORMAT_SIGNED_TENTHS
-        CALL    GRAPHICS_APPEND_CELSIUS
-        LD      DE, GRAPHICS_NUMBER
-        LD      A, 0Fh
-        CALL    GRAPHICS_PRINT
-        LD      DE, MSG_GRAPHICS_HINT
-        LD      IX, 12
-        LD      IY, 238
-        LD      A, 07h
-        CALL    GRAPHICS_PRINT
+        JP      C, .FAIL
+        CALL    GRAPHICS_DRAW_HEADER
+        JP      C, .FAIL
+        CALL    GRAPHICS_DRAW_CURRENT_TEXT
+        JP      C, .FAIL
+        CALL    GRAPHICS_DRAW_FOOTER
+        JP      C, .FAIL
         OR      A
         RET
 .FAIL:
         SCF
+        RET
+
+GRAPHICS_DRAW_HEADER:
+        LD      DE, MSG_GRAPHICS_TITLE
+        LD      IX, 12
+        LD      IY, 4
+        LD      A, 0Fh
+        CALL    GRAPHICS_PRINT
+        RET     C
+        CALL    GRAPHICS_FORMAT_LOCATION
+        LD      DE, CFG_FILE_BUFFER
+        LD      IX, 12
+        LD      IY, 16
+        LD      A, 0Eh
+        CALL    GRAPHICS_PRINT
+        RET     C
+        CALL    GRAPHICS_BUFFER_START
+        LD      HL, MSG_UPDATED
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      IX, WX1_MODEL + WM_CURRENT
+        CALL    GRAPHICS_BUFFER_APPEND_DATE_TIME
+        CALL    GRAPHICS_BUFFER_DONE
+        LD      IX, 12
+        LD      IY, 28
+        LD      A, 07h
+        JP      GRAPHICS_PRINT_BUFFER
+
+GRAPHICS_DRAW_CURRENT_TEXT:
+        CALL    GRAPHICS_BUFFER_START
+        LD      HL, MSG_NOW
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      DE, (WX1_MODEL + WM_CURRENT + WC_TEMPERATURE)
+        CALL    GRAPHICS_BUFFER_APPEND_SIGNED
+        LD      HL, MSG_CELSIUS
+        CALL    GRAPHICS_BUFFER_APPEND
+        CALL    GRAPHICS_BUFFER_DONE
+        LD      IX, 92
+        LD      IY, 48
+        LD      A, 0Fh
+        CALL    GRAPHICS_PRINT_BUFFER
+        RET     C
+
+        LD      A, (WX1_MODEL + WM_CURRENT + WC_CODE)
+        CALL    GRAPHICS_WMO_DESCRIPTION
+        EX      DE, HL
+        LD      IX, 92
+        LD      IY, 60
+        LD      A, 0Bh
+        CALL    GRAPHICS_PRINT
+        RET     C
+
+        CALL    GRAPHICS_BUFFER_START
+        LD      HL, MSG_GRAPHICS_FEELS
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      DE, (WX1_MODEL + WM_CURRENT + WC_APPARENT)
+        CALL    GRAPHICS_BUFFER_APPEND_SIGNED
+        LD      HL, MSG_CELSIUS
+        CALL    GRAPHICS_BUFFER_APPEND
+        CALL    GRAPHICS_BUFFER_DONE
+        LD      IX, 92
+        LD      IY, 72
+        LD      A, 07h
+        CALL    GRAPHICS_PRINT_BUFFER
+        RET     C
+
+        CALL    GRAPHICS_BUFFER_START
+        LD      HL, MSG_HUMIDITY
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      A, (WX1_MODEL + WM_CURRENT + WC_HUMIDITY)
+        CALL    GRAPHICS_BUFFER_APPEND_U8
+        LD      A, '%'
+        CALL    GRAPHICS_BUFFER_CHAR
+        CALL    GRAPHICS_BUFFER_DONE
+        LD      IX, 92
+        LD      IY, 84
+        LD      A, 07h
+        CALL    GRAPHICS_PRINT_BUFFER
+        RET     C
+
+        CALL    GRAPHICS_BUFFER_START
+        LD      HL, MSG_WIND
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      DE, (WX1_MODEL + WM_CURRENT + WC_WIND)
+        CALL    GRAPHICS_BUFFER_APPEND_UNSIGNED_TENTHS
+        LD      HL, MSG_METERS_PER_SECOND
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      A, ','
+        CALL    GRAPHICS_BUFFER_CHAR
+        LD      A, ' '
+        CALL    GRAPHICS_BUFFER_CHAR
+        LD      DE, (WX1_MODEL + WM_CURRENT + WC_DIRECTION)
+        CALL    GRAPHICS_DIRECTION
+        CALL    GRAPHICS_BUFFER_APPEND
+        CALL    GRAPHICS_BUFFER_DONE
+        LD      IX, 92
+        LD      IY, 96
+        LD      A, 07h
+        CALL    GRAPHICS_PRINT_BUFFER
+        RET     C
+
+        CALL    GRAPHICS_BUFFER_START
+        LD      HL, MSG_GRAPHICS_MINMAX
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      IX, (GRAPHICS_TODAY_MODEL_PTR)
+        LD      E, (IX + WD_MIN)
+        LD      D, (IX + WD_MIN + 1)
+        CALL    GRAPHICS_BUFFER_APPEND_SIGNED
+        LD      A, '/'
+        CALL    GRAPHICS_BUFFER_CHAR
+        LD      IX, (GRAPHICS_TODAY_MODEL_PTR)
+        LD      E, (IX + WD_MAX)
+        LD      D, (IX + WD_MAX + 1)
+        CALL    GRAPHICS_BUFFER_APPEND_SIGNED
+        CALL    GRAPHICS_BUFFER_DONE
+        LD      IX, 92
+        LD      IY, 108
+        LD      A, 07h
+        CALL    GRAPHICS_PRINT_BUFFER
+        RET     C
+
+        CALL    GRAPHICS_BUFFER_START
+        LD      HL, MSG_GRAPHICS_PRECIP
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      IX, (GRAPHICS_TODAY_MODEL_PTR)
+        LD      A, (IX + WD_PRECIPITATION)
+        CALL    GRAPHICS_BUFFER_APPEND_U8
+        LD      A, '%'
+        CALL    GRAPHICS_BUFFER_CHAR
+        LD      A, ','
+        CALL    GRAPHICS_BUFFER_CHAR
+        LD      A, ' '
+        CALL    GRAPHICS_BUFFER_CHAR
+        LD      HL, MSG_WIND_MAX
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      IX, (GRAPHICS_TODAY_MODEL_PTR)
+        LD      E, (IX + WD_WIND)
+        LD      D, (IX + WD_WIND + 1)
+        CALL    GRAPHICS_BUFFER_APPEND_UNSIGNED_TENTHS
+        LD      HL, MSG_METERS_PER_SECOND
+        CALL    GRAPHICS_BUFFER_APPEND
+        CALL    GRAPHICS_BUFFER_DONE
+        LD      IX, 92
+        LD      IY, 120
+        LD      A, 07h
+        JP      GRAPHICS_PRINT_BUFFER
+
+GRAPHICS_DRAW_FOOTER:
+        CALL    GRAPHICS_BUFFER_START
+        LD      HL, WX1_MODEL + WM_SOURCE
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      A, (BACKEND)
+        CP      BACKEND_WIFI
+        LD      HL, MSG_GRAPHICS_BACKEND_WIFI
+        JR      Z, .BACKEND
+        LD      HL, MSG_GRAPHICS_BACKEND_RTL
+.BACKEND:
+        CALL    GRAPHICS_BUFFER_APPEND
+        CALL    GRAPHICS_BUFFER_DONE
+        LD      IX, 8
+        LD      IY, 224
+        LD      A, 0Bh
+        CALL    GRAPHICS_PRINT_BUFFER
+        RET     C
+        LD      DE, MSG_GRAPHICS_HINT
+        LD      IX, 8
+        LD      IY, 240
+        LD      A, 07h
+        JP      GRAPHICS_PRINT
+
+GRAPHICS_PREPARE_DAYS:
+        LD      HL, WX1_MODEL + WM_DAYS
+        LD      (GRAPHICS_TODAY_MODEL_PTR), HL
+        LD      DE, WM_DAY_SIZE
+        ADD     HL, DE
+        LD      (GRAPHICS_DAY_BASE), HL
         RET
 
 ; Days actually parsed, clamped to the six the layout has columns for.  Both
@@ -402,6 +618,9 @@ GRAPHICS_DRAW:
 ; model happened to hold past the end.  Z means there is nothing to draw.
 GRAPHICS_DAY_COUNT:
         LD      A, (WX1_MODEL + WM_DAY_COUNT)
+        OR      A
+        RET     Z
+        DEC     A                       ; first D belongs to the current block
         CP      7
         JR      C, .CLAMPED
         LD      A, 6
@@ -419,7 +638,7 @@ GRAPHICS_DRAW_CURRENT_ICON:
         JP      GRAPHICS_DRAW_TILES
 
 GRAPHICS_DRAW_DAY_ICONS:
-        LD      IX, WX1_MODEL + WM_DAYS
+        LD      IX, (GRAPHICS_DAY_BASE)
         LD      HL, DAY_ICON_X
         LD      (GRAPHICS_DAY_X_PTR), HL
         CALL    GRAPHICS_DAY_COUNT
@@ -432,7 +651,7 @@ GRAPHICS_DRAW_DAY_ICONS:
         ; GRAPHICS_WMO_SMALL_ICON just returned has to survive the X lookup
         ; below - which builds its own value in HL on the way to IX.
         PUSH    HL
-        LD      IY, 158
+        LD      IY, 148
         LD      DE, (GRAPHICS_DAY_X_PTR)
         LD      A, (DE)
         LD      L, A
@@ -454,13 +673,13 @@ GRAPHICS_DRAW_DAY_ICONS:
         LD      A, (GRAPHICS_DAY_LEFT)
         DEC     A
         LD      (GRAPHICS_DAY_LEFT), A
-        JR      NZ, .NEXT
+        JP      NZ, .NEXT
         OR      A
         RET
 
-; Each 32x32 pictogram has its low/high temperature directly underneath.
+; Each future-day card contains weekday/date, low/high and precipitation.
 GRAPHICS_DRAW_DAY_VALUES:
-        LD      IX, WX1_MODEL + WM_DAYS
+        LD      IX, (GRAPHICS_DAY_BASE)
         LD      HL, DAY_ICON_X
         LD      (GRAPHICS_DAY_X_PTR), HL
         CALL    GRAPHICS_DAY_COUNT
@@ -477,7 +696,28 @@ GRAPHICS_DRAW_DAY_VALUES:
         LD      L, A
         PUSH    HL
         POP     IX
-        LD      IY, 198
+        LD      IY, 136
+        LD      IX, (GRAPHICS_DAY_MODEL_PTR)
+        CALL    GRAPHICS_FORMAT_DAY_LABEL
+        LD      IX, (GRAPHICS_DAY_X_PTR)
+        LD      E, (IX)
+        LD      D, (IX + 1)
+        PUSH    DE
+        POP     IX
+        LD      A, 0Eh
+        CALL    GRAPHICS_PRINT_NUMBER
+        RET     C
+
+        LD      IX, (GRAPHICS_DAY_MODEL_PTR)
+        LD      DE, (GRAPHICS_DAY_X_PTR)
+        LD      A, (DE)
+        LD      L, A
+        INC     DE
+        LD      A, (DE)
+        LD      H, A
+        PUSH    HL
+        POP     IX
+        LD      IY, 184
         ; WD_MIN, not offset 0: the record starts with WD_YEAR, so reading from
         ; the base printed the year as tenths of a degree ("+202.6" for 2026).
         LD      HL, (GRAPHICS_DAY_MODEL_PTR)
@@ -498,7 +738,7 @@ GRAPHICS_DRAW_DAY_VALUES:
         LD      L, A
         PUSH    HL
         POP     IX
-        LD      IY, 214
+        LD      IY, 196
         LD      HL, (GRAPHICS_DAY_MODEL_PTR)
         LD      DE, WD_MAX
         ADD     HL, DE
@@ -506,6 +746,34 @@ GRAPHICS_DRAW_DAY_VALUES:
         INC     HL
         LD      D, (HL)
         CALL    GRAPHICS_PRINT_SIGNED_TENTHS
+        RET     C
+
+        LD      IX, (GRAPHICS_DAY_MODEL_PTR)
+        LD      A, (IX + WD_PRECIPITATION)
+        CALL    GRAPHICS_FORMAT_U8
+        LD      HL, GRAPHICS_NUMBER
+.PERCENT_END:
+        LD      A, (HL)
+        OR      A
+        JR      Z, .PERCENT
+        INC     HL
+        JR      .PERCENT_END
+.PERCENT:
+        LD      (HL), '%'
+        INC     HL
+        LD      (HL), 0
+        LD      DE, (GRAPHICS_DAY_X_PTR)
+        LD      A, (DE)
+        LD      L, A
+        INC     DE
+        LD      A, (DE)
+        LD      H, A
+        PUSH    HL
+        POP     IX
+        LD      IY, 208
+        LD      A, 0Bh
+        CALL    GRAPHICS_PRINT_NUMBER
+        RET     C
         LD      IX, (GRAPHICS_DAY_MODEL_PTR)
         LD      DE, WM_DAY_SIZE
         ADD     IX, DE
@@ -517,7 +785,7 @@ GRAPHICS_DRAW_DAY_VALUES:
         LD      A, (GRAPHICS_DAY_LEFT)
         DEC     A
         LD      (GRAPHICS_DAY_LEFT), A
-        JR      NZ, .NEXT
+        JP      NZ, .NEXT
         OR      A
         RET
 
@@ -653,6 +921,222 @@ GRAPHICS_PRINT:
         LD      B, AFNT_APRINT
         JP      LIBMAN.l_call
 
+GRAPHICS_PRINT_BUFFER:
+        LD      DE, CFG_FILE_BUFFER
+        JP      GRAPHICS_PRINT
+
+GRAPHICS_PRINT_NUMBER:
+        LD      DE, GRAPHICS_NUMBER
+        JP      GRAPHICS_PRINT
+
+GRAPHICS_BUFFER_START:
+        LD      HL, CFG_FILE_BUFFER
+        LD      (GRAPHICS_BUFFER_PTR), HL
+        RET
+
+GRAPHICS_BUFFER_START_NUMBER:
+        LD      HL, GRAPHICS_NUMBER
+        LD      (GRAPHICS_BUFFER_PTR), HL
+        RET
+
+; Append ASCIIZ HL without its terminator to the active formatting buffer.
+GRAPHICS_BUFFER_APPEND:
+        LD      DE, (GRAPHICS_BUFFER_PTR)
+        CALL    GRAPHICS_COPY_Z_BODY
+        LD      (GRAPHICS_BUFFER_PTR), DE
+        RET
+
+GRAPHICS_BUFFER_CHAR:
+        LD      HL, (GRAPHICS_BUFFER_PTR)
+        LD      (HL), A
+        INC     HL
+        LD      (GRAPHICS_BUFFER_PTR), HL
+        RET
+
+GRAPHICS_BUFFER_DONE:
+        XOR     A
+        JP      GRAPHICS_BUFFER_CHAR
+
+GRAPHICS_BUFFER_APPEND_SIGNED:
+        CALL    GRAPHICS_FORMAT_SIGNED_TENTHS
+        LD      HL, GRAPHICS_NUMBER
+        JR      GRAPHICS_BUFFER_APPEND
+
+GRAPHICS_BUFFER_APPEND_UNSIGNED_TENTHS:
+        CALL    GRAPHICS_FORMAT_SIGNED_TENTHS
+        LD      HL, GRAPHICS_NUMBER + 1 ; positive values: omit the '+'
+        JR      GRAPHICS_BUFFER_APPEND
+
+GRAPHICS_BUFFER_APPEND_U8:
+        CALL    GRAPHICS_FORMAT_U8
+        LD      HL, GRAPHICS_NUMBER
+        JR      GRAPHICS_BUFFER_APPEND
+
+; A -> decimal ASCIIZ in GRAPHICS_NUMBER.
+GRAPHICS_FORMAT_U8:
+        LD      C, A
+        LD      B, 0
+.HUNDREDS:
+        CP      100
+        JR      C, .TENS_START
+        SUB     100
+        INC     B
+        JR      .HUNDREDS
+.TENS_START:
+        LD      C, A
+        LD      D, 0
+.TENS:
+        CP      10
+        JR      C, .WRITE
+        SUB     10
+        INC     D
+        JR      .TENS
+.WRITE:
+        LD      C, A
+        LD      HL, GRAPHICS_NUMBER
+        LD      A, B
+        OR      A
+        JR      Z, .NO_HUNDREDS
+        ADD     A, '0'
+        LD      (HL), A
+        INC     HL
+.NO_HUNDREDS:
+        LD      A, B
+        OR      D
+        JR      Z, .ONES
+        LD      A, D
+        ADD     A, '0'
+        LD      (HL), A
+        INC     HL
+.ONES: LD      A, C
+        ADD     A, '0'
+        LD      (HL), A
+        INC     HL
+        LD      (HL), 0
+        RET
+
+; A 0..99 -> two decimal characters in the active buffer.
+GRAPHICS_BUFFER_APPEND_TWO:
+        LD      B, '0'
+.TENS:
+        CP      10
+        JR      C, .WRITE
+        SUB     10
+        INC     B
+        JR      .TENS
+.WRITE:
+        LD      C, A
+        LD      A, B
+        CALL    GRAPHICS_BUFFER_CHAR
+        LD      A, C
+        ADD     A, '0'
+        JP      GRAPHICS_BUFFER_CHAR
+
+; IX current-record date/time -> DD.MM HH:MM.
+GRAPHICS_BUFFER_APPEND_DATE_TIME:
+        LD      A, (IX + WC_DAY)
+        CALL    GRAPHICS_BUFFER_APPEND_TWO
+        LD      A, '.'
+        CALL    GRAPHICS_BUFFER_CHAR
+        LD      A, (IX + WC_MONTH)
+        CALL    GRAPHICS_BUFFER_APPEND_TWO
+        LD      A, ' '
+        CALL    GRAPHICS_BUFFER_CHAR
+        LD      A, (IX + WC_HOUR)
+        CALL    GRAPHICS_BUFFER_APPEND_TWO
+        LD      A, ':'
+        CALL    GRAPHICS_BUFFER_CHAR
+        LD      A, (IX + WC_MINUTE)
+        JP      GRAPHICS_BUFFER_APPEND_TWO
+
+; IX day record -> "ПН DD.MM" in GRAPHICS_NUMBER.
+GRAPHICS_FORMAT_DAY_LABEL:
+        PUSH    IX
+        CALL    GRAPHICS_WEEKDAY
+        ADD     A, A
+        LD      E, A
+        LD      D, 0
+        LD      HL, GRAPHICS_WEEKDAY_TABLE
+        ADD     HL, DE
+        LD      E, (HL)
+        INC     HL
+        LD      D, (HL)
+        EX      DE, HL
+        PUSH    HL                      ; START_NUMBER uses HL for destination
+        CALL    GRAPHICS_BUFFER_START_NUMBER
+        POP     HL
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      A, ' '
+        CALL    GRAPHICS_BUFFER_CHAR
+        POP     IX
+        LD      A, (IX + WD_DAY)
+        CALL    GRAPHICS_BUFFER_APPEND_TWO
+        LD      A, '.'
+        CALL    GRAPHICS_BUFFER_CHAR
+        LD      A, (IX + WD_MONTH)
+        CALL    GRAPHICS_BUFFER_APPEND_TWO
+        JP      GRAPHICS_BUFFER_DONE
+
+; Gregorian weekday, 0=Sunday. Sakamoto's formula; IX points at a day record.
+GRAPHICS_WEEKDAY:
+        LD      L, (IX + WD_YEAR)
+        LD      H, (IX + WD_YEAR + 1)
+        LD      A, (IX + WD_MONTH)
+        CP      3
+        JR      NC, .YEAR_READY
+        DEC     HL
+.YEAR_READY:
+        LD      (GRAPHICS_NUMBER), HL
+        LD      (GRAPHICS_NUMBER + 2), HL
+        LD      BC, 4
+        CALL    GRAPHICS_QUOTIENT
+        LD      DE, (GRAPHICS_NUMBER + 2)
+        ADD     HL, DE
+        LD      (GRAPHICS_NUMBER + 2), HL
+        LD      HL, (GRAPHICS_NUMBER)
+        LD      BC, 100
+        CALL    GRAPHICS_QUOTIENT
+        EX      DE, HL
+        LD      HL, (GRAPHICS_NUMBER + 2)
+        OR      A
+        SBC     HL, DE
+        LD      (GRAPHICS_NUMBER + 2), HL
+        LD      HL, (GRAPHICS_NUMBER)
+        LD      BC, 400
+        CALL    GRAPHICS_QUOTIENT
+        LD      DE, (GRAPHICS_NUMBER + 2)
+        ADD     HL, DE
+        LD      A, (IX + WD_MONTH)
+        DEC     A
+        LD      E, A
+        LD      D, 0
+        PUSH    HL
+        LD      HL, GRAPHICS_MONTH_OFFSETS
+        ADD     HL, DE
+        LD      A, (HL)
+        POP     HL
+        LD      E, A
+        LD      D, 0
+        ADD     HL, DE
+        LD      A, (IX + WD_DAY)
+        LD      E, A
+        ADD     HL, DE
+        LD      BC, 7
+        CALL    WX1_MOD16
+        LD      A, L
+        RET
+
+; HL / BC -> HL quotient (small date values; remainder discarded).
+GRAPHICS_QUOTIENT:
+        LD      DE, 0
+.LOOP: OR      A
+        SBC     HL, BC
+        JR      C, .DONE
+        INC     DE
+        JR      .LOOP
+.DONE: EX      DE, HL
+        RET
+
 GRAPHICS_PRINT_SIGNED_TENTHS:
         CALL    GRAPHICS_FORMAT_SIGNED_TENTHS
         LD      DE, GRAPHICS_NUMBER
@@ -725,24 +1209,6 @@ GRAPHICS_FORMAT_SIGNED_TENTHS:
         XOR     A
         LD      (GRAPHICS_NUMBER + 5), A
 .OUT:
-        RET
-
-; Append the unit to the just-formatted current temperature. The day columns
-; continue to use the number-only wrapper above.
-GRAPHICS_APPEND_CELSIUS:
-        LD      HL, GRAPHICS_NUMBER
-.FIND_END:
-        LD      A, (HL)
-        OR      A
-        JR      Z, .APPEND
-        INC     HL
-        JR      .FIND_END
-.APPEND:
-        LD      (HL), ' '
-        INC     HL
-        LD      (HL), 'C'
-        INC     HL
-        LD      (HL), 0
         RET
 
 ; Compose location and country as one string so AFNT320's variable-width font
@@ -893,3 +1359,11 @@ GRAPHICS_STATUS_RECT:
         DB      0, 0, 0                 ; reserved
         ASSERT  $ - GRAPHICS_STATUS_RECT = GFX_FILL_RECT_SIZE
 DAY_ICON_X:             DW 8,60,112,164,216,268
+GRAPHICS_MONTH_OFFSETS: DB 0,3,2,5,0,3,5,1,4,6,2,4
+GRAPHICS_WEEKDAY_TABLE:
+        DW      MSG_DAY_SUN, MSG_DAY_MON, MSG_DAY_TUE, MSG_DAY_WED
+        DW      MSG_DAY_THU, MSG_DAY_FRI, MSG_DAY_SAT
+GRAPHICS_HELP_LINES:
+        DW      MSG_GRAPHICS_HELP_TITLE, CFG_FILE_BUFFER
+        DW      MSG_GRAPHICS_HELP_AUTHOR, MSG_GRAPHICS_HELP_1
+        DW      MSG_GRAPHICS_HELP_2, MSG_GRAPHICS_HELP_RETURN

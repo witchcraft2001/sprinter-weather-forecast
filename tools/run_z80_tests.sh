@@ -15,7 +15,8 @@ dump="$build_dir/t_response.out"
 sjasmplus --nologo --fullpath -I "$repo_root/src" -I "$repo_root/tests/z80" \
   --raw="$bin" "$repo_root/tests/z80/t_response.asm"
 rm -f "$dump"
-"$ticks" -pc 0 -counter 5000000 -output "$dump" "$bin" >/dev/null 2>&1 || true
+# Includes every possible two-chunk boundary for the complete CRLF fixture.
+"$ticks" -pc 0 -counter 12000000 -output "$dump" "$bin" >/dev/null 2>&1 || true
 [[ -f "$dump" ]] || { echo "FAIL z80 response harness: no memory dump" >&2; exit 1; }
 
 byte_at_file() { dd if="$1" bs=1 skip="$2" count=1 2>/dev/null | od -An -tu1 | tr -d ' \n'; }
@@ -25,7 +26,7 @@ byte_at() { byte_at_file "$dump" "$1"; }
   echo "FAIL z80 response harness: assertion $(byte_at 57346), failures=$(byte_at 57347)" >&2
   exit 1
 }
-echo "Z80 response harness: OK"
+echo "Z80 response harness: OK (whole, bytewise and every two-chunk split)"
 
 config_bin="$build_dir/t_config.bin"
 config_dump="$build_dir/t_config.out"
