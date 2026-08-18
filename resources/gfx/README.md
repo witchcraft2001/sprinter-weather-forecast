@@ -8,7 +8,9 @@ These PNG files are the editable source of every icon embedded in
 
 - `weather/64/` — 15 current-condition icons, exactly 64×64 pixels.
 - `weather/32/` — 15 independently editable forecast icons, exactly 32×32.
-- `ui/` — four 16×16 auxiliary icons.
+- `ui/` — four 16×16 auxiliary icons. `precipitation.png` is the droplet
+  drawn in every forecast card next to the probability percentage; the
+  other three are currently unused by the runtime.
 
 The numeric filename prefix is the internal icon-family index and must not be
 changed. Large and small directories must keep the same names.

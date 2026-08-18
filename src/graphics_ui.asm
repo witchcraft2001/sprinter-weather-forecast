@@ -678,6 +678,11 @@ GRAPHICS_DRAW_DAY_ICONS:
         RET
 
 ; Each future-day card contains weekday/date, low/high and precipitation.
+; A day column is too narrow for the "Osadki" caption the current block uses,
+; so a droplet tile marks the percentage as precipitation probability instead
+; of humidity; the number moves right to make room for it.
+DAY_PRECIP_ICON_Y       EQU 204
+DAY_PRECIP_TEXT_DX      EQU 18
 GRAPHICS_DRAW_DAY_VALUES:
         LD      IX, (GRAPHICS_DAY_BASE)
         LD      HL, DAY_ICON_X
@@ -686,37 +691,14 @@ GRAPHICS_DRAW_DAY_VALUES:
         LD      (GRAPHICS_DAY_LEFT), A
         RET     Z
 .NEXT:  LD      (GRAPHICS_DAY_MODEL_PTR), IX
-        LD      DE, (GRAPHICS_DAY_X_PTR)
-        LD      A, (DE)
-        LD      (GRAPHICS_NUMBER), A
-        INC     DE
-        LD      A, (DE)
-        LD      H, A
-        LD      A, (GRAPHICS_NUMBER)
-        LD      L, A
-        PUSH    HL
-        POP     IX
         LD      IY, 136
-        LD      IX, (GRAPHICS_DAY_MODEL_PTR)
         CALL    GRAPHICS_FORMAT_DAY_LABEL
-        LD      IX, (GRAPHICS_DAY_X_PTR)
-        LD      E, (IX)
-        LD      D, (IX + 1)
-        PUSH    DE
-        POP     IX
+        CALL    GRAPHICS_DAY_COLUMN
         LD      A, 0Eh
         CALL    GRAPHICS_PRINT_NUMBER
         RET     C
 
-        LD      IX, (GRAPHICS_DAY_MODEL_PTR)
-        LD      DE, (GRAPHICS_DAY_X_PTR)
-        LD      A, (DE)
-        LD      L, A
-        INC     DE
-        LD      A, (DE)
-        LD      H, A
-        PUSH    HL
-        POP     IX
+        CALL    GRAPHICS_DAY_COLUMN
         LD      IY, 184
         ; WD_MIN, not offset 0: the record starts with WD_YEAR, so reading from
         ; the base printed the year as tenths of a degree ("+202.6" for 2026).
@@ -727,17 +709,7 @@ GRAPHICS_DRAW_DAY_VALUES:
         INC     HL
         LD      D, (HL)
         CALL    GRAPHICS_PRINT_SIGNED_TENTHS
-        LD      IX, (GRAPHICS_DAY_MODEL_PTR)
-        LD      DE, (GRAPHICS_DAY_X_PTR)
-        LD      A, (DE)
-        LD      (GRAPHICS_NUMBER), A
-        INC     DE
-        LD      A, (DE)
-        LD      H, A
-        LD      A, (GRAPHICS_NUMBER)
-        LD      L, A
-        PUSH    HL
-        POP     IX
+        CALL    GRAPHICS_DAY_COLUMN
         LD      IY, 196
         LD      HL, (GRAPHICS_DAY_MODEL_PTR)
         LD      DE, WD_MAX
@@ -762,14 +734,18 @@ GRAPHICS_DRAW_DAY_VALUES:
         LD      (HL), '%'
         INC     HL
         LD      (HL), 0
-        LD      DE, (GRAPHICS_DAY_X_PTR)
-        LD      A, (DE)
-        LD      L, A
-        INC     DE
-        LD      A, (DE)
-        LD      H, A
-        PUSH    HL
-        POP     IX
+        ; The formatted percentage stays in GRAPHICS_NUMBER across the tile
+        ; call: GRAPHICS_DRAW_TILES keeps its own state and does not touch it.
+        CALL    GRAPHICS_DAY_COLUMN
+        LD      IY, DAY_PRECIP_ICON_Y
+        LD      HL, GRAPHICS_UTILITY_REFS + 6 ; droplet, 16x16 as one tile
+        LD      B, 1
+        LD      C, 1
+        CALL    GRAPHICS_DRAW_TILES
+        RET     C
+        CALL    GRAPHICS_DAY_COLUMN
+        LD      DE, DAY_PRECIP_TEXT_DX
+        ADD     IX, DE
         LD      IY, 208
         LD      A, 0Bh
         CALL    GRAPHICS_PRINT_NUMBER
@@ -787,6 +763,19 @@ GRAPHICS_DRAW_DAY_VALUES:
         LD      (GRAPHICS_DAY_LEFT), A
         JP      NZ, .NEXT
         OR      A
+        RET
+
+; IX = left edge of the card being drawn.  Each value in a card needs it and
+; every print in between clobbers IX, so the lookup is shared.
+GRAPHICS_DAY_COLUMN:
+        LD      DE, (GRAPHICS_DAY_X_PTR)
+        LD      A, (DE)
+        LD      L, A
+        INC     DE
+        LD      A, (DE)
+        LD      H, A
+        PUSH    HL
+        POP     IX
         RET
 
 ; HL = TileRef array, B = count, IX/IY = first tile position.

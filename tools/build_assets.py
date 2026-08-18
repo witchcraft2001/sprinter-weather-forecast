@@ -174,8 +174,17 @@ def utility_tile(index: int) -> bytes:
         circle(image, 8, 10, 4, 9); rect(image, 7, 3, 2, 6, 9)
     elif index == 2:  # wind
         rect(image, 2, 5, 11, 1, 11); rect(image, 4, 9, 10, 1, 11); rect(image, 2, 13, 8, 1, 11)
-    else:  # precipitation
-        rect(image, 3, 4, 10, 5, 20); rect(image, 5, 10, 2, 4, 22); rect(image, 10, 10, 2, 4, 22)
+    else:  # precipitation probability
+        # A teardrop in the same blue the rain icons use, so the bare per-day
+        # percentage cannot be mistaken for humidity.  Rows are explicit: the
+        # circle/rect primitives cannot express the tapered top cleanly.
+        for y, x, width in (
+            (1, 7, 2), (2, 7, 2), (3, 6, 4), (4, 6, 4), (5, 5, 6), (6, 5, 6),
+            (7, 4, 8), (8, 4, 8), (9, 3, 10), (10, 3, 10), (11, 3, 10),
+            (12, 4, 8), (13, 5, 6),
+        ):
+            rect(image, x, y, width, 1, 27)
+        rect(image, 5, 8, 2, 2, 25)
     return bytes(pixel for row in image for pixel in row)
 
 
