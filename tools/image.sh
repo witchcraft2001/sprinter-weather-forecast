@@ -36,7 +36,9 @@ for artifact in "${DIST_FILES[@]}"; do
 done
 
 if [[ "${WEATHER_DEBUG_CFG:-0}" == "1" ]]; then
-  cp "$repo_root/resources/WEATHER.CFG.sample" "$stage/WEATHER.CFG"
+  # The stable template leaves LOCATION commented out; the debug image needs a
+  # fixed place so screenshots stay comparable between runs.
+  cp "$repo_root/resources/WEATHER.CFG.debug" "$stage/WEATHER.CFG"
   mcopy -o -i "$image" "$stage/WEATHER.CFG" ::WEATHER.CFG
   # GFX320's own prebuilt reference consumer.  It enters video mode #81 exactly
   # as WEATHER.EXE does, but without its PRELOAD loader. Running it separates

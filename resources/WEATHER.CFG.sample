@@ -1,5 +1,18 @@
-# Deterministic location for the debug FAT image.
+# WEATHER.CFG template: rename this file to WEATHER.CFG next to WEATHER.EXE.
+# Format: KEY=VALUE, one per line. Lines starting with # or ; are comments.
+# Every key is optional - delete a line to keep the built-in default.
+
+# Weather Gopher service.
 HOST=go.sprinter.ru
+
+# TCP port, 1..65535.
 PORT=70
+
+# Gopher selector, must start with a slash.
 SELECTOR=/weather/zx
-LOCATION=43.2389,76.8897
+
+# Your location. While it stays commented out, the service picks the place by
+# the address you connect from. Use a city with a country code, or the exact
+# coordinates - uncomment one line and put your own value in it:
+#LOCATION=Almaty,KZ
+#LOCATION=43.2389,76.8897
