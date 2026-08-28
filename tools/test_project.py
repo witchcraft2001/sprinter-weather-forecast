@@ -131,7 +131,7 @@ def check_source_contract() -> None:
         and "L_TRAMPOLINE" in loader_source,
         "primary loader must own WFG2, Hrust and the WIN2 handoff",
     )
-    banner = 'Weather Forecast v.0.1.0 by Dmitry Mikhalchenkov.'
+    banner = 'Weather Forecast v.0.1.1 by Dmitry Mikhalchenkov.'
     require(
         banner in loader_source
         and "LD      HL, L_BANNER\n        LD      C, DSS_PCHARS\n        RST     DSS"

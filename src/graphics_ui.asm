@@ -6,6 +6,20 @@ AFNT_SET_WINDOW         EQU 4
 BIOS_GETMEMBLKPAGES     EQU 0C5h
 GFX_REQUIRED_CAPS       EQU GFX_CAP_ACCEL | GFX_CAP_KEY_FF | GFX_CAP_PALETTE_RGB8 | GFX_CAP_FADE | GFX_CAP_TILES | GFX_CAP_WIN0_SOURCE
 
+; Steps of GRAPHICS_BEGIN_ATTEMPT.  They all report the same text-mode message,
+; because a failure here means there is no working AFNT320 to draw a graphical
+; one; GRAPHICS_INIT_STEP records which of them was running.
+GSTAGE_BOOT             EQU 1
+GSTAGE_GFX_LOAD         EQU 2
+GSTAGE_GFX_INIT         EQU 3
+GSTAGE_GFX_PAGES        EQU 4
+GSTAGE_AFNT_LOAD        EQU 5
+GSTAGE_GFX_WINDOW       EQU 6
+GSTAGE_AFNT_WINDOW      EQU 7
+GSTAGE_PALETTE          EQU 8
+GSTAGE_VMODE            EQU 9
+GSTAGE_SCREEN           EQU 10
+
         INCLUDE "graphics_assets.inc"
 
 ; The primary loader has already allocated and expanded this block before it
@@ -99,12 +113,18 @@ GRAPHICS_BEGIN_ATTEMPT:
         LD      A, (GRAPHICS_MODE_ACTIVE)
         OR      A
         JR      NZ, .STATUS
+        CALL    GRAPHICS_INIT_STEP
+        DB      GSTAGE_BOOT
         CALL    GRAPHICS_BOOT
         JR      C, .FAIL
         CALL    GRAPHICS_LOAD_LIBRARIES
         JR      C, .FAIL
+        CALL    GRAPHICS_INIT_STEP
+        DB      GSTAGE_PALETTE
         CALL    GRAPHICS_LOAD_PALETTE
         JR      C, .FAIL
+        CALL    GRAPHICS_INIT_STEP
+        DB      GSTAGE_VMODE
         LD      C, DSS_GETVMOD
         RST     DSS
         LD      (GRAPHICS_OLD_MODE), A
@@ -117,6 +137,8 @@ GRAPHICS_BEGIN_ATTEMPT:
         JR      C, .FAIL
         LD      A, 1
         LD      (GRAPHICS_MODE_ACTIVE), A
+        CALL    GRAPHICS_INIT_STEP
+        DB      GSTAGE_SCREEN
         LD      HL, MSG_GRAPHICS_STAGE
         CALL    GRAPHICS_SHOW_STATUS_SCREEN
         JR      C, .ACTIVE_FAIL
@@ -133,6 +155,21 @@ GRAPHICS_BEGIN_ATTEMPT:
         LD      (GRAPHICS_MODE_ACTIVE), A
 .FAIL:
         SCF
+        RET
+
+; The step id follows the CALL as one byte.  This is not a console marker: it
+; only records which step is running, so that the text-mode error path in
+; weatherc.asm can name it.  Written this way because the steps below are
+; entered with values already in A, B, C, DE and HL - this form touches no
+; register and no flag, so the call can sit anywhere.
+GRAPHICS_INIT_STEP:
+        EX      (SP), HL
+        PUSH    AF
+        LD      A, (HL)
+        LD      (GRAPHICS_INIT_STAGE), A
+        POP     AF
+        INC     HL
+        EX      (SP), HL
         RET
 
 GRAPHICS_RENDER_FORECAST:
@@ -182,6 +219,8 @@ GRAPHICS_LOAD_LIBRARIES:
         LD      A, (GRAPHICS_LIBS_LOADED)
         OR      A
         JR      NZ, .WINDOWS
+        CALL    GRAPHICS_INIT_STEP
+        DB      GSTAGE_GFX_LOAD
         LD      HL, GFX_NAME
         LD      A, 1
         CALL    LIBMAN.l_load
@@ -191,6 +230,8 @@ GRAPHICS_LOAD_LIBRARIES:
         ; consumer (gfx320/test.asm) still calls GFX_INIT explicitly and checks
         ; the status.  Doing the same turns a rejected window layout into a
         ; reported code instead of a library left half-configured.
+        CALL    GRAPHICS_INIT_STEP
+        DB      GSTAGE_GFX_INIT
         LD      B, GFX_INIT
         CALL    LIBMAN.l_call
         JR      C, .FAIL_GFX
@@ -198,6 +239,8 @@ GRAPHICS_LOAD_LIBRARIES:
         JR      NZ, .FAIL_GFX
         ; GFX320 copies the table into its own storage, so this consumes the
         ; list GRAPHICS_BOOT just collected in the borrowed config buffer.
+        CALL    GRAPHICS_INIT_STEP
+        DB      GSTAGE_GFX_PAGES
         LD      DE, CFG_FILE_BUFFER
         LD      IX, GRAPHICS_ASSET_PAGES
         LD      B, GFX_SET_PAGE_TABLE
@@ -205,6 +248,8 @@ GRAPHICS_LOAD_LIBRARIES:
         JR      C, .FAIL_GFX
         OR      A
         JR      NZ, .FAIL_GFX
+        CALL    GRAPHICS_INIT_STEP
+        DB      GSTAGE_AFNT_LOAD
         LD      HL, AFNT_NAME
         LD      A, 1
         CALL    LIBMAN.l_load
@@ -213,6 +258,8 @@ GRAPHICS_LOAD_LIBRARIES:
         LD      A, 1
         LD      (GRAPHICS_LIBS_LOADED), A
 .WINDOWS:
+        CALL    GRAPHICS_INIT_STEP
+        DB      GSTAGE_GFX_WINDOW
         LD      HL, (GFX_HANDLE)
         LD      E, 3
         LD      B, GFX_SET_VRAM_WINDOW
@@ -220,6 +267,8 @@ GRAPHICS_LOAD_LIBRARIES:
         JR      C, .FAIL
         OR      A
         JR      NZ, .FAIL
+        CALL    GRAPHICS_INIT_STEP
+        DB      GSTAGE_AFNT_WINDOW
         LD      HL, (AFNT_HANDLE)
         LD      E, 3
         LD      B, AFNT_SET_WINDOW
@@ -495,10 +544,8 @@ GRAPHICS_DRAW_CURRENT_TEXT:
         LD      HL, MSG_CELSIUS
         CALL    GRAPHICS_BUFFER_APPEND
         CALL    GRAPHICS_BUFFER_DONE
-        LD      IX, 92
         LD      IY, 72
-        LD      A, 07h
-        CALL    GRAPHICS_PRINT_BUFFER
+        CALL    GRAPHICS_PRINT_FIELD
         RET     C
 
         CALL    GRAPHICS_BUFFER_START
@@ -509,10 +556,8 @@ GRAPHICS_DRAW_CURRENT_TEXT:
         LD      A, '%'
         CALL    GRAPHICS_BUFFER_CHAR
         CALL    GRAPHICS_BUFFER_DONE
-        LD      IX, 92
         LD      IY, 84
-        LD      A, 07h
-        CALL    GRAPHICS_PRINT_BUFFER
+        CALL    GRAPHICS_PRINT_FIELD
         RET     C
 
         CALL    GRAPHICS_BUFFER_START
@@ -530,10 +575,8 @@ GRAPHICS_DRAW_CURRENT_TEXT:
         CALL    GRAPHICS_DIRECTION
         CALL    GRAPHICS_BUFFER_APPEND
         CALL    GRAPHICS_BUFFER_DONE
-        LD      IX, 92
         LD      IY, 96
-        LD      A, 07h
-        CALL    GRAPHICS_PRINT_BUFFER
+        CALL    GRAPHICS_PRINT_FIELD
         RET     C
 
         CALL    GRAPHICS_BUFFER_START
@@ -550,10 +593,8 @@ GRAPHICS_DRAW_CURRENT_TEXT:
         LD      D, (IX + WD_MAX + 1)
         CALL    GRAPHICS_BUFFER_APPEND_SIGNED
         CALL    GRAPHICS_BUFFER_DONE
-        LD      IX, 92
         LD      IY, 108
-        LD      A, 07h
-        CALL    GRAPHICS_PRINT_BUFFER
+        CALL    GRAPHICS_PRINT_FIELD
         RET     C
 
         CALL    GRAPHICS_BUFFER_START
@@ -577,10 +618,8 @@ GRAPHICS_DRAW_CURRENT_TEXT:
         LD      HL, MSG_METERS_PER_SECOND
         CALL    GRAPHICS_BUFFER_APPEND
         CALL    GRAPHICS_BUFFER_DONE
-        LD      IX, 92
         LD      IY, 120
-        LD      A, 07h
-        JP      GRAPHICS_PRINT_BUFFER
+        JP      GRAPHICS_PRINT_FIELD
 
 GRAPHICS_DRAW_FOOTER:
         CALL    GRAPHICS_BUFFER_START
@@ -652,16 +691,11 @@ GRAPHICS_DRAW_DAY_ICONS:
         ; below - which builds its own value in HL on the way to IX.
         PUSH    HL
         LD      IY, 148
-        LD      DE, (GRAPHICS_DAY_X_PTR)
-        LD      A, (DE)
-        LD      L, A
-        INC     DE
-        LD      A, (DE)
-        LD      H, A
-        PUSH    HL
-        POP     IX
-        INC     DE
-        LD      (GRAPHICS_DAY_X_PTR), DE
+        CALL    GRAPHICS_DAY_COLUMN
+        LD      HL, (GRAPHICS_DAY_X_PTR)
+        INC     HL
+        INC     HL
+        LD      (GRAPHICS_DAY_X_PTR), HL
         POP     HL
         LD      B, 4                    ; 32px icon
         LD      C, 2                    ; ...as 2x2 tiles
@@ -913,6 +947,13 @@ GRAPHICS_PRINT:
 GRAPHICS_PRINT_BUFFER:
         LD      DE, CFG_FILE_BUFFER
         JP      GRAPHICS_PRINT
+
+; Every grey field of the current-conditions block shares one left edge and one
+; colour; only the row differs, so callers set IY and come here.
+GRAPHICS_PRINT_FIELD:
+        LD      IX, 92
+        LD      A, 07h
+        JP      GRAPHICS_PRINT_BUFFER
 
 GRAPHICS_PRINT_NUMBER:
         LD      DE, GRAPHICS_NUMBER

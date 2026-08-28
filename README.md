@@ -1,6 +1,6 @@
 # Weather Forecast for Sprinter DSS
 
-Версия 0.1.0.
+Версия 0.1.1.
 
 Weather Forecast — клиент прогноза погоды для Sprinter DSS. Он читает
 необязательный `WEATHER.CFG`, выбирает UNET backend, получает через Gopher и

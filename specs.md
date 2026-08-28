@@ -1,6 +1,6 @@
 # Weather Forecast для Sprinter DSS
 
-Версия: 0.1.0. Автор: Dmitry Mikhalchenkov, FidoNet: 2:5030/1997.10.
+Версия: 0.1.1. Автор: Dmitry Mikhalchenkov, FidoNet: 2:5030/1997.10.
 
 ## Назначение и состояние
 

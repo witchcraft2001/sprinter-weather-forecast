@@ -677,6 +677,11 @@ ERROR_GRAPHICS_BOOT:
         ; Without GFX320/AFNT320 there is no graphical error path available.
         LD      HL, MSG_GRAPHICS_BOOT_ERROR
         CALL    PUTS_LN
+        LD      HL, MSG_TRANSPORT_STAGE
+        CALL    PUTS
+        LD      A, (GRAPHICS_INIT_STAGE)
+        CALL    PUT_HEX8
+        CALL    CRLF
         LD      B, EXIT_DLL
         JP      ATTEMPT_FINISH
         ENDIF
@@ -1078,7 +1083,10 @@ GRAPHICS_DAY_MODEL_PTR EQU GRAPHICS_DAY_LEFT + 1
 GRAPHICS_DAY_BASE EQU GRAPHICS_DAY_MODEL_PTR + 2
 GRAPHICS_TODAY_MODEL_PTR EQU GRAPHICS_DAY_BASE + 2
 GRAPHICS_BUFFER_PTR EQU GRAPHICS_TODAY_MODEL_PTR + 2
-BSS_END         EQU GRAPHICS_BUFFER_PTR + 2
+; Which GRAPHICS_BEGIN_ATTEMPT step is running.  Every failure there shares one
+; text-mode message, so the number is the only clue a remote user can report.
+GRAPHICS_INIT_STAGE EQU GRAPHICS_BUFFER_PTR + 2
+BSS_END         EQU GRAPHICS_INIT_STAGE + 1
         ELSE
 BSS_END         EQU LAST_ATTEMPT_EXIT + 1
         ENDIF
