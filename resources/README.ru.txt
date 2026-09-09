@@ -1,4 +1,4 @@
-Weather Forecast v.0.1.1 для Sprinter DSS
+Weather Forecast v.0.1.2 для Sprinter DSS
 
 Weather Forecast получает прогноз WX1 через Gopher и показывает текущие
 условия и прогноз погоды. WEATHER.EXE использует графический режим 320x256.

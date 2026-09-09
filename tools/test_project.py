@@ -14,8 +14,8 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
 
 EXPECTED_DLLS = {
-    "UNETESP.DLL": "f03352df4f4af42683d1fde4a8260d0bd3a55f51b1366f10b5467b38566e9abc",
-    "UNETRTL.DLL": "7f4bfbbb38d5363d6fc0dfc4a0f972fda5f04ac94dcc58dde9d569c21fc81b82",
+    "UNETESP.DLL": "2bf4f90afbbdf34a68e486def7c5bc5cc17be4361f77cecb52004068c4ab5455",
+    "UNETRTL.DLL": "8881b534306efb00b2c871ed7044bb2c2310fb8b25b33e01880239c81632160c",
 }
 
 
@@ -131,7 +131,7 @@ def check_source_contract() -> None:
         and "L_TRAMPOLINE" in loader_source,
         "primary loader must own WFG2, Hrust and the WIN2 handoff",
     )
-    banner = 'Weather Forecast v.0.1.1 by Dmitry Mikhalchenkov.'
+    banner = 'Weather Forecast v.0.1.2 by Dmitry Mikhalchenkov.'
     require(
         banner in loader_source
         and "LD      HL, L_BANNER\n        LD      C, DSS_PCHARS\n        RST     DSS"
