@@ -10,9 +10,12 @@
 - `WEATHER.EXE` — графический клиент `320×256×256` с `AFNT320.DLL` и
   `GFX320.DLL`.
 
-Оба читают необязательный `WEATHER.CFG`, выбирают `UNETESP.DLL` при
-`NET=WIFI` либо `UNETRTL.DLL` при `NET=RTL`, получают `/weather/zx`, строго
-разбирают WX1 и безопасно очищают сеть, DLL и DSS-память при любом выходе.
+Оба читают необязательный `WEATHER.CFG` и используют стандартный `UNETLD`:
+`NET` (3–4 символа `[A-Z0-9]`, без учёта регистра) выбирает
+`UNET<TAG>.DLL`, а `NET=WIFI` — `UNETESP.DLL`. Текущий дистрибутив содержит
+ESP, RTL8019A и 3Com 3C509B (`NET=509B`). Клиенты требуют совместимый UNET ABI
+и `UNET_CAP_TCP`, получают `/weather/zx`, строго разбирают WX1 и безопасно
+очищают сеть, DLL и DSS-память при любом выходе.
 
 ## Сервис и WX1
 
@@ -54,7 +57,7 @@ resident runtime (#8100, новая страница WIN2)
 
 Загрузчик находится в `src/weather_loader.asm`; Hrust включён только в него.
 Основной клиент собирается из `src/weather.asm`/`src/weatherc.asm` с
-`WEATHER_RUNTIME=1`; его стек снова `0x600` байт. `WIN1` принадлежит libman,
+`WEATHER_RUNTIME=1`; его стек равен `0x400` байт. `WIN1` принадлежит libman,
 `WIN2` — resident-коду и стеку, `WIN3` — UNET/VRAM по текущей фазе, `WIN0` —
 источнику GFX320 и временной цели распаковки.
 
@@ -108,11 +111,13 @@ src/
   graphics_ui.asm     WEATHER.EXE layout поверх AFNT320/GFX320
 resources/gfx/        редактируемые PNG
 tools/                сборка, WFG2 packer, FAT/ZIP и harness
-extern/               закреплённые ESP, RTL, libman, sprinter-libs
+extern/               закреплённые unet_libs_asm и sprinter-libs
 ```
 
-Готовые UNET DLL не пересобираются данным проектом. Локальных копий libman,
-UNET ABI или исходников сетевых DLL нет.
+Готовые UNET DLL не пересобираются данным проектом: полный набор берётся из
+`extern/unet_libs_asm/extern/core/dll/manifest.json`. Локальный `src/dss.inc`
+содержит только используемые константы Estex DSS; UNET ABI, UNETLD и libman
+подключаются из сабмодуля.
 
 ## Сборка и проверки
 
@@ -120,8 +125,8 @@ UNET ABI или исходников сетевых DLL нет.
 make             WEATHER.EXE и WEATHERC.EXE
 make weather     только графический EXE и primary loader
 make weatherc    только console EXE
-make test        host checks, WX1 harness и Hrust round-trip harness
-make package     ZIP с обоими EXE, четырьмя DLL и WEATHER.SMP
+make test        host checks, config/UNETLD/WX1/Hrust Z80 harnesses
+make package     ZIP с обоими EXE, графическими и всеми UNET DLL, WEATHER.SMP
 make image       distr/weather-forecast.img
 ```
 
@@ -133,7 +138,7 @@ harness проверяет распаковку пяти реальных пот
 
 ### Завершено
 
-- [x] CFG, UNET ESP/RTL, Gopher transport, streaming WX1, text UI и cleanup.
+- [x] CFG, универсальный UNETLD, Gopher transport, streaming WX1, text UI и cleanup.
 - [x] `WEATHERC.EXE` и `WEATHER.EXE`, ZIP/FAT12-образ и host/Z80 harness.
 - [x] AFNT320/GFX320, WMO tile mapping, PNG asset pipeline и fade UI.
 - [x] WFG2 primary loader: runtime в отдельной WIN2 странице, Hrust только в
@@ -147,21 +152,24 @@ harness проверяет распаковку пяти реальных пот
 - [x] Добавить единый графический экран сетевой/CFG/parser/DLL ошибки и
       графические состояния подключения/запроса.
 - [ ] Отретушировать PNG и проверить все 15 WMO семейств в 64×64 и 32×32.
-- [ ] Проверить `R`/Enter после графического кадра на ESP и RTL.
+- [ ] Ручная проверка владельцем Sprinter: `R`/Enter после графического кадра
+      на ESP, RTL8019A и 3C509B.
 
 ### Release gate
 
 - [ ] Проверить default и alternate `HOST`/`PORT`/`SELECTOR`/`LOCATION`.
-- [ ] Прогнать ESP-AT 2.2.2 и RTL8019A в MAME и на реальном Sprinter:
-      успех, timeout, early close, data lost, malformed WX1, DLL/CFG errors.
+- [ ] Ручная проверка владельцем в MAME и на Sprinter для ESP-AT 2.2.2,
+      RTL8019A и 3C509B: успешное обновление, отмена, повторное обновление,
+      динамический backend в footer/help и сетевые ошибки.
 - [ ] Проверить 40/80 columns, CP866, запуск рядом с EXE и через `PATH`,
       повторный refresh и повторный запуск.
-- [ ] Проверить ZIP и FAT12 с обоими EXE, всеми DLL и шаблоном WEATHER.SMP.
+- [x] Автоматически проверить ZIP и FAT12 с обоими EXE, всеми DLL из
+      манифеста (включая `UNET509B.DLL`) и неизменённым шаблоном WEATHER.SMP.
 - [ ] Добавить hardware gate для PRELOAD loader: WFG2 read, пять распаковок,
       переход trampoline в WIN2 и последующий `R`/Enter.
 
 ## Ограничения
 
 Нет HTTPS/HTTP, почасового прогноза, фонового обновления и прямого управления
-ESP/RTL в обход UNET. Графический runtime не реализует собственный blitter и
+сетевыми адаптерами в обход UNET. Графический runtime не реализует собственный blitter и
 не читает ассеты с диска после старта.

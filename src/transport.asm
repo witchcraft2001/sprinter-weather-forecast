@@ -38,7 +38,7 @@ GOPHER_FETCH:
         LD      DE, CFG_HOST
         LD      IX, CFG_PORT
         LD      B, UNET_FN_CONNECT
-        CALL    CALL_UNET
+        CALL    UNETLD.CALL
         JP      C, .LIBMAN_CONNECT
         OR      A
         JP      NZ, .UNET_CONNECT
@@ -54,7 +54,7 @@ GOPHER_FETCH:
         LD      DE, REQUEST_BUFFER
         LD      IX, (REQUEST_SIZE)
         LD      B, UNET_FN_SEND
-        CALL    CALL_UNET
+        CALL    UNETLD.CALL
         JP      C, .LIBMAN_SEND
         OR      A
         JP      NZ, .UNET_SEND
@@ -79,14 +79,13 @@ GOPHER_FETCH:
         LD      IX, RECV_BUFFER_SIZE
         LD      IY, 5000
         LD      B, UNET_FN_RECV
-        CALL    CALL_UNET
+        CALL    UNETLD.CALL
         JP      C, .LIBMAN_RECV
         CP      NERR_OK
         JR      Z, .RECV_OK
         CP      NERR_CLOSED
         JR      Z, .RECV_CLOSED
-        CP      NERR_CANCEL
-        JP      Z, .UNET_RECV
+        ; NERR_CANCEL and every other backend error are preserved verbatim.
         JP      .UNET_RECV
 
 .RECV_OK:
@@ -375,7 +374,7 @@ TRANSPORT_CAPTURE_DETAIL:
         LD      DE, TRANSPORT_DETAIL
         LD      IX, TRANSPORT_DETAIL_SIZE
         LD      B, UNET_FN_LASTERR
-        CALL    CALL_UNET
+        CALL    UNETLD.CALL
         JR      C, .DONE
         LD      (TRANSPORT_DETAIL_STATUS), A
         OR      A

@@ -2,9 +2,8 @@
 ; WEATHERC.EXE - console WX1 forecast client for Sprinter DSS.
 ; WEATHER.EXE is built from the same client with WEATHER_GRAPHICS defined.
 ;
-; Reads NET from the DSS environment, selects a prebuilt UNET backend, loads
-; it through current libman, validates ABI/capabilities, receives WX1 and
-; renders a validated text forecast after network cleanup.
+; Uses the standard UNETLD selector/loader, receives WX1 and renders a
+; validated forecast after network cleanup.
 ; ============================================================================
 
 EXE_VERSION             EQU 1
@@ -17,13 +16,7 @@ EXE_HEADER_SIZE         EQU 0200h
 ; DSS program loads here.
 EXE_LOAD_ADDRESS        EQU 08100h
 
-FLAG_DLL_LOADED         EQU 00000001b
-FLAG_NET_INITIALIZED    EQU 00000010b
 FLAG_CHANNEL_OPEN        EQU 00000100b
-
-BACKEND_NONE            EQU 0
-BACKEND_WIFI            EQU 1
-BACKEND_RTL             EQU 2
 
 EXIT_OK                 EQU 0
 EXIT_DLL                EQU 2
@@ -44,8 +37,8 @@ EXIT_TRANSPORT          EQU 5
         ELSE
         DEFINE  LIBMAN_MAX_LIBS 1
         ENDIF
-        ; Keep the successful loader path compact, but publish the exact
-        ; loading stage and a DLL INIT status when a real machine rejects it.
+        ; Publish the exact loading stage and DLL INIT status when a real
+        ; machine rejects a library.
         DEFINE  LIBMAN_DIAGNOSTICS
         DEFINE  LIBMAN_NO_LEGACY_API
 
@@ -80,6 +73,8 @@ START:
         EI
         ENDIF
         CALL    CLEAR_BSS
+        ; Compact UNETLD state lives in the caller-owned WIN2 BSS.
+        CALL    UNETLD.RESET
 
         IFDEF WEATHER_GRAPHICS
         POP     AF
@@ -117,96 +112,51 @@ ATTEMPT_START:
         ENDIF
 .NO_CFG_WARNING:
 
-        CALL    SELECT_BACKEND
+        CALL    UNETLD.SELECT
         JP      C, ERROR_CONFIG
 
         IFNDEF WEATHER_GRAPHICS
           LD      HL, MSG_LOADING
           CALL    PUTS
-          LD      HL, (DLL_NAME_PTR)
+          LD      HL, UNETLD.DLL_NAME
           CALL    PUTS_LN
         ENDIF
 
         IFDEF WEATHER_GRAPHICS
         CALL    GRAPHICS_REUSE_UNET
+        JP      C, ERROR_CONFIG
         JP      Z, UNET_READY
         ENDIF
-        LD      HL, (DLL_NAME_PTR)
         LD      A, 1                    ; every DLL maps into WIN1
-        CALL    LIBMAN.l_load
-        JP      C, ERROR_LOAD
-
-        LD      (DLL_HANDLE), HL
-        LD      A, (STATE_FLAGS)
-        OR      FLAG_DLL_LOADED
-        LD      (STATE_FLAGS), A
-
-        LD      HL, (DLL_HANDLE)
-        LD      DE, DLL_INFO
-        CALL    LIBMAN.l_info
-        JP      C, ERROR_INFO
-        CALL    VALIDATE_DLL_INFO
-        JP      C, ERROR_INFO_NAME
+        CALL    UNETLD.LOAD
+        JP      C, ERROR_UNETLD
 
         IFNDEF WEATHER_GRAPHICS
           LD      HL, MSG_DLL
           CALL    PUTS
-          LD      HL, DLL_INFO + 16
+          LD      HL, UNETLD.DLL_INFO + 16
           CALL    PUTS_LN
         ENDIF
 
-        LD      B, UNET_FN_GETCAPS
-        CALL    CALL_UNET
-        JP      C, ERROR_CALL
-        OR      A
-        JP      NZ, ERROR_UNET_STATUS
-        LD      (UNET_CAPS), DE
-        LD      (UNET_ABI), IX
-
-        LD      A, (UNET_ABI + 1)
-        CP      HIGH UNET_ABI_VERSION
-        JP      NZ, ERROR_ABI
-
-        LD      A, (UNET_CAPS)
-        AND     UNET_CAP_TCP
-        JP      Z, ERROR_TCP_CAP
+        LD      DE, UNET_CAP_TCP
+        CALL    UNETLD.REQUIRE
+        JP      C, ERROR_TCP_CAP
 
         IFDEF WEATHER_GRAPHICS
-        LD      A, (BACKEND)
-        LD      (LOADED_BACKEND), A
+        CALL    SAVE_LOADED_DLL_NAME
         ENDIF
 
 UNET_READY:
         LD      A, UNET_OPT_CANCELKEYS
         LD      DE, 1
         LD      B, UNET_FN_SETOPT
-        CALL    CALL_UNET
+        CALL    UNETLD.CALL
         JP      C, ERROR_CALL
         OR      A
         JP      NZ, ERROR_UNET_STATUS
 
-        ; STATUS(0xff) is intentionally non-hardware: it checks that the
-        ; backend-specific environment has been published before NETINIT.
-        LD      A, 0FFh
-        LD      B, UNET_FN_STATUS
-        CALL    CALL_UNET
-        JP      C, ERROR_CALL
-        LD      (LAST_UNET_STATUS), A
-        CP      NERR_OK
-        JR      Z, .STATUS_ACCEPTED
-        CP      NERR_NONET
-        JP      NZ, ERROR_UNET_STATUS
-
-.STATUS_ACCEPTED:
-        LD      B, UNET_FN_NETINIT
-        CALL    CALL_UNET
-        JP      C, ERROR_CALL
-        OR      A
-        JP      NZ, ERROR_NETINIT
-
-        LD      A, (STATE_FLAGS)
-        OR      FLAG_NET_INITIALIZED
-        LD      (STATE_FLAGS), A
+        CALL    UNETLD.NETSTART
+        JP      C, ERROR_NETSTART
 
         IFDEF WEATHER_GRAPHICS
           LD      HL, MSG_LOADING_WEATHER
@@ -214,7 +164,7 @@ UNET_READY:
         ELSE
           LD      HL, MSG_READY
           CALL    PUTS
-          LD      HL, DLL_INFO + 16
+          LD      HL, UNETLD.DLL_INFO + 16
           CALL    PUTS_LN
           LD      HL, MSG_LOADING_WEATHER
           CALL    PUTS_LN
@@ -242,74 +192,9 @@ UNET_READY:
         LD      B, EXIT_OK
         JP      ATTEMPT_FINISH
 
-; ---------------------------------------------------------------------------
-; Environment/backend selection.
-; Out: CF=0 and DLL_NAME_PTR/BACKEND selected, CF=1 otherwise.
-; ---------------------------------------------------------------------------
-SELECT_BACKEND:
-        XOR     A
-        LD      (ENV_VALUE), A
-        LD      HL, ENV_NET
-        LD      DE, ENV_VALUE
-        LD      B, ENV_GET
-        LD      C, DSS_ENVIRON
-        RST     DSS
-        JR      C, .NOT_CONFIGURED
-        OR      A
-        JR      Z, .NOT_CONFIGURED
-
-        LD      A, (ENV_VALUE)
-        OR      A
-        JR      Z, .NOT_CONFIGURED
-
-        LD      HL, ENV_VALUE
-        LD      DE, VALUE_WIFI
-        CALL    STREQ
-        JR      Z, .WIFI
-
-        LD      HL, ENV_VALUE
-        LD      DE, VALUE_RTL
-        CALL    STREQ
-        JR      Z, .RTL
-
-        IFNDEF WEATHER_GRAPHICS
-          LD      HL, MSG_NET_UNKNOWN
-          CALL    PUTS
-          LD      HL, ENV_VALUE
-          CALL    PUTS_LN
-        ENDIF
-        SCF
-        RET
-
-.WIFI:
-        LD      A, BACKEND_WIFI
-        LD      (BACKEND), A
-        LD      HL, DLL_ESP
-        LD      (DLL_NAME_PTR), HL
-        IFNDEF WEATHER_GRAPHICS
-          LD      HL, MSG_BACKEND_WIFI
-          CALL    PUTS_LN
-        ENDIF
-        OR      A
-        RET
-
-.RTL:
-        LD      A, BACKEND_RTL
-        LD      (BACKEND), A
-        LD      HL, DLL_RTL
-        LD      (DLL_NAME_PTR), HL
-        IFNDEF WEATHER_GRAPHICS
-          LD      HL, MSG_BACKEND_RTL
-          CALL    PUTS_LN
-        ENDIF
-        OR      A
-        RET
-
-.NOT_CONFIGURED:
-        SCF
-        RET
-
-; Compare ASCIIZ HL and DE. Returns Z when equal.
+        IFDEF WEATHER_GRAPHICS
+; Compare ASCIIZ HL and DE. Returns Z when equal. The console client unloads
+; its sole DLL after every attempt and does not need backend-name reuse.
 STREQ:
         LD      A, (DE)
         LD      C, A
@@ -321,51 +206,25 @@ STREQ:
         INC     HL
         INC     DE
         JR      STREQ
-
-; Call the currently loaded DLL. Carry denotes a libman dispatcher failure;
-; the UNET function's status remains in A and must be checked separately.
-CALL_UNET:
-        LD      HL, (DLL_HANDLE)
-        JP      LIBMAN.l_call
-
-; Confirm that the library selected by NET has the corresponding L1 name.
-; The version suffix is intentionally not fixed here; the pinned file hash is
-; the build-time identity, while runtime accepts a compatible package update.
-VALIDATE_DLL_INFO:
-        LD      A, (BACKEND)
-        CP      BACKEND_WIFI
-        LD      DE, INFO_ESP_TAG
-        JR      Z, .COMPARE
-        CP      BACKEND_RTL
-        LD      DE, INFO_RTL_TAG
-        JR      NZ, .FAIL
-.COMPARE:
-        LD      HL, DLL_INFO + 16
-.LOOP:
-        LD      A, (DE)
-        OR      A
-        RET     Z
-        CP      (HL)
-        JR      NZ, .FAIL
-        INC     DE
-        INC     HL
-        JR      .LOOP
-.FAIL:
-        SCF
-        RET
+        ENDIF
 
 ; ---------------------------------------------------------------------------
 ; Errors.
 ; ---------------------------------------------------------------------------
 ERROR_CONFIG:
-        CALL    CLEANUP
         IFDEF WEATHER_GRAPHICS
         LD      HL, MSG_NET_NOT_CONFIGURED
         CALL    GRAPHICS_SHOW_ERROR
         ELSE
+        LD      A, (UNETLD.ERROR)
+        CP      UNETLD_E_BADVALUE
         LD      HL, MSG_NET_NOT_CONFIGURED
+        JR      NZ, .MESSAGE
+        LD      HL, MSG_NET_INVALID
+.MESSAGE:
         CALL    PUTS_LN
         CALL    PRINT_CONFIG_HINT
+        CALL    PRINT_UNETLD_DIAGNOSTICS
         ENDIF
         LD      B, EXIT_CONFIG
         JP      ATTEMPT_FINISH
@@ -391,124 +250,73 @@ ERROR_CONFIG_FILE:
         LD      B, EXIT_CONFIG
         JP      ATTEMPT_FINISH
 
-ERROR_LOAD:
-        CALL    CLEANUP
+ERROR_UNETLD:
         IFDEF WEATHER_GRAPHICS
+        LD      A, (UNETLD.ERROR)
+        CP      UNETLD_E_ABI
         LD      HL, MSG_GRAPHICS_DLL_ERROR
+        JR      NZ, .SHOW
+        LD      HL, MSG_GRAPHICS_ABI_ERROR
+.SHOW:
         CALL    GRAPHICS_SHOW_ERROR
         ELSE
-        LD      HL, MSG_LOAD_ERROR
+        LD      HL, MSG_UNETLD_ERROR
         CALL    PUTS
-        LD      HL, (DLL_NAME_PTR)
+        LD      HL, UNETLD.DLL_NAME
         CALL    PUTS_LN
-        LD      HL, MSG_REASON
-        CALL    PUTS
-        LD      A, (LIBMAN.l_reason)
-        CALL    PUT_HEX8
-        LD      HL, MSG_DSS_CODE
-        CALL    PUTS
-        LD      A, (LIBMAN.l_dss_error)
-        CALL    PUT_HEX8
-        LD      HL, MSG_LOAD_STAGE
-        CALL    PUTS
-        LD      A, (LIBMAN.l_load_stage)
-        CALL    PUT_HEX8
-        LD      HL, MSG_INIT_STATUS
-        CALL    PUTS
-        LD      A, (LIBMAN.l_init_status)
-        CALL    PUT_HEX8
-        CALL    CRLF
+        CALL    PRINT_UNETLD_DIAGNOSTICS
         LD      HL, MSG_DLL_HINT
         CALL    PUTS_LN
         ENDIF
-        LD      B, EXIT_DLL
-        JP      ATTEMPT_FINISH
-
-ERROR_INFO:
-        CALL    CLEANUP
-        LD      HL, MSG_INFO_ERROR
-        IFDEF WEATHER_GRAPHICS
-        CALL    GRAPHICS_SHOW_ERROR
-        ELSE
-        CALL    PUTS_LN
-        ENDIF
-        LD      B, EXIT_DLL
-        JP      ATTEMPT_FINISH
-
-ERROR_INFO_NAME:
-        CALL    CLEANUP
-        IFDEF WEATHER_GRAPHICS
-        LD      HL, MSG_GRAPHICS_DLL_ERROR
-        CALL    GRAPHICS_SHOW_ERROR
-        ELSE
-        LD      HL, MSG_INFO_NAME_ERROR
-        CALL    PUTS
-        LD      HL, DLL_INFO + 16
-        CALL    PUTS_LN
-        ENDIF
-        LD      B, EXIT_DLL
-        JP      ATTEMPT_FINISH
-
-ERROR_ABI:
-        CALL    CLEANUP
-        IFDEF WEATHER_GRAPHICS
-        LD      HL, MSG_GRAPHICS_ABI_ERROR
-        CALL    GRAPHICS_SHOW_ERROR
-        ELSE
-        LD      HL, MSG_ABI_ERROR
-        CALL    PUTS
-        LD      DE, (UNET_ABI)
-        CALL    PUT_HEX16
-        CALL    CRLF
-        ENDIF
+        ; LOAD failures after l_load leave a handle open by contract.
+        CALL    FREE_UNET
         LD      B, EXIT_DLL
         JP      ATTEMPT_FINISH
 
 ERROR_TCP_CAP:
-        CALL    CLEANUP
         LD      HL, MSG_TCP_ERROR
         IFDEF WEATHER_GRAPHICS
         CALL    GRAPHICS_SHOW_ERROR
         ELSE
         CALL    PUTS_LN
+        CALL    PRINT_UNETLD_DIAGNOSTICS
         ENDIF
+        CALL    FREE_UNET
         LD      B, EXIT_DLL
         JP      ATTEMPT_FINISH
 
 ERROR_CALL:
-        CALL    CLEANUP
         LD      HL, MSG_CALL_ERROR
         IFDEF WEATHER_GRAPHICS
         CALL    GRAPHICS_SHOW_ERROR
         ELSE
         CALL    PUTS_LN
+        CALL    PRINT_UNETLD_DIAGNOSTICS
         ENDIF
         LD      B, EXIT_DLL
         JP      ATTEMPT_FINISH
 
 ERROR_UNET_STATUS:
-        PUSH    AF
-        CALL    CLEANUP
-        POP     AF
-        LD      (LAST_UNET_STATUS), A
+        LD      (UNETLD.LAST_STATUS), A
         IFDEF WEATHER_GRAPHICS
         LD      HL, MSG_GRAPHICS_UNET_ERROR
         CALL    GRAPHICS_SHOW_ERROR
         ELSE
         LD      HL, MSG_UNET_ERROR
         CALL    PUTS
-        LD      A, (LAST_UNET_STATUS)
+        LD      A, (UNETLD.LAST_STATUS)
         CALL    PUT_HEX8
         CALL    CRLF
+        CALL    PRINT_UNETLD_DIAGNOSTICS
         ENDIF
         LD      B, EXIT_NETWORK
         JP      ATTEMPT_FINISH
 
-ERROR_NETINIT:
-        PUSH    AF
-        CALL    CLEANUP
-        POP     AF
-        LD      (LAST_UNET_STATUS), A
+ERROR_NETSTART:
+        IFNDEF WEATHER_GRAPHICS
+        CALL    PRINT_UNETLD_DIAGNOSTICS
+        ENDIF
+        LD      A, (UNETLD.LAST_STATUS)
         IFDEF WEATHER_GRAPHICS
         CP      NERR_NONET
         JR      Z, .G_CONFIG
@@ -545,7 +353,7 @@ ERROR_NETINIT:
 
         LD      HL, MSG_NETINIT_ERROR
         CALL    PUTS
-        LD      A, (LAST_UNET_STATUS)
+        LD      A, (UNETLD.LAST_STATUS)
         CALL    PUT_HEX8
         CALL    CRLF
         LD      B, EXIT_NETWORK
@@ -687,19 +495,37 @@ ERROR_GRAPHICS_BOOT:
         ENDIF
 
 PRINT_CONFIG_HINT:
-        LD      A, (BACKEND)
-        CP      BACKEND_WIFI
-        JR      Z, .WIFI
-        CP      BACKEND_RTL
-        JR      Z, .RTL
-        LD      HL, MSG_HINT_BOTH
+        LD      HL, MSG_HINT_BACKEND
         JP      PUTS_LN
-.WIFI:
-        LD      HL, MSG_HINT_WIFI
-        JP      PUTS_LN
-.RTL:
-        LD      HL, MSG_HINT_RTL
-        JP      PUTS_LN
+
+; Print loader, UNET status and libman failure planes before cleanup resets
+; compact UNETLD state. This is intentionally console-only.
+PRINT_UNETLD_DIAGNOSTICS:
+        LD      HL, MSG_UNETLD_CODE
+        CALL    PUTS
+        LD      A, (UNETLD.ERROR)
+        CALL    PUT_HEX8
+        LD      HL, MSG_UNET_STATUS
+        CALL    PUTS
+        LD      A, (UNETLD.LAST_STATUS)
+        CALL    PUT_HEX8
+        LD      HL, MSG_REASON
+        CALL    PUTS
+        LD      A, (LIBMAN.l_reason)
+        CALL    PUT_HEX8
+        LD      HL, MSG_DSS_CODE
+        CALL    PUTS
+        LD      A, (LIBMAN.l_dss_error)
+        CALL    PUT_HEX8
+        LD      HL, MSG_LOAD_STAGE
+        CALL    PUTS
+        LD      A, (LIBMAN.l_load_stage)
+        CALL    PUT_HEX8
+        LD      HL, MSG_INIT_STATUS
+        CALL    PUTS
+        LD      A, (LIBMAN.l_init_status)
+        CALL    PUT_HEX8
+        JP      CRLF
 
         INCLUDE "config.asm"
         INCLUDE "wx1.asm"
@@ -718,25 +544,14 @@ ATTEMPT_RESET:
         ; ATTEMPT_FINISH always cleaned the preceding run. Clear only state
         ; that is deliberately re-discovered from CFG/ENV on every refresh.
         XOR     A
-        LD      (BACKEND), A
-        IFDEF WEATHER_GRAPHICS
-        ; A validated UNET handle remains in the libman table between
-        ; refreshes. It is replaced only when NET changes backend.
-        LD      (DLL_NAME_PTR), A
-        LD      (DLL_NAME_PTR + 1), A
-        LD      (LAST_UNET_STATUS), A
-        CALL    WX1_RESET
-        RET
-        ELSE
-        LD      (DLL_HANDLE), A
-        LD      (DLL_HANDLE + 1), A
-        LD      (DLL_NAME_PTR), A
-        LD      (DLL_NAME_PTR + 1), A
-        LD      (LAST_UNET_STATUS), A
         LD      (STATE_FLAGS), A
+        IFDEF WEATHER_GRAPHICS
+        ; SELECT resets ERROR itself. LAST_STATUS must be cleared explicitly
+        ; when a validated DLL is retained between graphical refreshes.
+        LD      (UNETLD.LAST_STATUS), A
+        ENDIF
         CALL    WX1_RESET
         RET
-        ENDIF
 
 ; B is the exit category of the completed attempt. Retry reloads both CFG and
 ; NET, while Esc returns the category of an unrecovered error (or 0 on success).
@@ -772,6 +587,9 @@ EXIT_PROGRAM:
         LD      A, B
         LD      (EXIT_CODE), A
         CALL    CLEANUP
+        ; Required on every final path. It is harmless when console cleanup or
+        ; an earlier error already unloaded the backend.
+        CALL    UNETLD.UNLOAD
         IFDEF WEATHER_GRAPHICS
         CALL    GRAPHICS_FINALIZE
         ENDIF
@@ -787,20 +605,20 @@ CLEANUP:
         JR      Z, .NETDONE
         XOR     A
         LD      B, UNET_FN_CLOSE
-        CALL    CALL_UNET               ; best effort during unwind
+        CALL    UNETLD.CALL              ; best effort during unwind
         LD      A, (STATE_FLAGS)
         AND     0FFh - FLAG_CHANNEL_OPEN
         LD      (STATE_FLAGS), A
 
 .NETDONE:
-        LD      A, (STATE_FLAGS)
-        AND     FLAG_NET_INITIALIZED
+        LD      A, (UNETLD.FLAGS)
+        AND     UNETLD_F_NETINIT
         JR      Z, .FREE_DLL
         LD      B, UNET_FN_NETDONE
-        CALL    CALL_UNET               ; best effort during unwind
-        LD      A, (STATE_FLAGS)
-        AND     0FFh - FLAG_NET_INITIALIZED
-        LD      (STATE_FLAGS), A
+        CALL    UNETLD.CALL              ; best effort during unwind
+        LD      A, (UNETLD.FLAGS)
+        AND     0FFh - UNETLD_F_NETINIT
+        LD      (UNETLD.FLAGS), A
 
 .FREE_DLL:
         IFDEF WEATHER_GRAPHICS
@@ -810,17 +628,25 @@ CLEANUP:
         ENDIF
 
 FREE_UNET:
-        LD      A, (STATE_FLAGS)
-        AND     FLAG_DLL_LOADED
-        RET     Z
-        LD      HL, (DLL_HANDLE)
-        CALL    LIBMAN.l_free
+        CALL    UNETLD.UNLOAD
+        IFDEF WEATHER_GRAPHICS
         XOR     A
-        LD      (STATE_FLAGS), A
-        LD      (DLL_HANDLE), A
-        LD      (DLL_HANDLE + 1), A
-        LD      (LOADED_BACKEND), A
+        LD      (LOADED_DLL_NAME), A
+        ENDIF
         RET
+
+        IFDEF WEATHER_GRAPHICS
+SAVE_LOADED_DLL_NAME:
+        LD      HL, UNETLD.DLL_NAME
+        LD      DE, LOADED_DLL_NAME
+.COPY: LD      A, (HL)
+        LD      (DE), A
+        INC     HL
+        INC     DE
+        OR      A
+        JR      NZ, .COPY
+        RET
+        ENDIF
 
 CLEAR_BSS:
         LD      HL, BSS_BASE
@@ -918,26 +744,17 @@ PRINT_RESPONSE_TAIL:
         DJNZ    .LOOP
         RET
 
-ENV_NET:
-        DB      "NET", 0
-VALUE_WIFI:
-        DB      "WIFI", 0
-VALUE_RTL:
-        DB      "RTL", 0
-DLL_ESP:
-        DB      "UNETESP.DLL", 0
-DLL_RTL:
-        DB      "UNETRTL.DLL", 0
-INFO_ESP_TAG:
-        DB      "UNETESP", 0
-INFO_RTL_TAG:
-        DB      "UNETRTL", 0
-
         ; Keep this explicit: WEATHER.EXE is assembled through src/weather.asm
         ; and sjasmplus resolves nested includes from that source directory.
         INCLUDE "../build/generated/messages.inc"
 
         ENDMODULE
+
+; UNETLD's 315-byte state is address-only and occupies the first part of the
+; emitted WIN2 BSS below. Its code uses the same embedded libman instance as
+; the graphics libraries.
+        DEFINE  UNETLD_STATE_BASE MAIN.BSS_BASE
+        INCLUDE "unetld.asm"
 
 ; The current libman source is compiled into WEATHERC.EXE. It uses WIN3 as
 ; scratch, restores it on return and loads the selected DLL into WIN1.
@@ -949,22 +766,18 @@ INFO_RTL_TAG:
 ; not have a separate BSS-size header field: memory after the raw image may be
 ; reused by another allocation, so receive buffers must be emitted explicitly.
 BSS_BASE        EQU $
-DLL_HANDLE      EQU BSS_BASE
-STATE_FLAGS     EQU DLL_HANDLE + 2
-BACKEND         EQU STATE_FLAGS + 1
-EXIT_CODE       EQU BACKEND + 1
-LAST_UNET_STATUS EQU EXIT_CODE + 1
-DLL_NAME_PTR    EQU LAST_UNET_STATUS + 1
-LOADED_BACKEND  EQU DLL_NAME_PTR + 2
-UNET_CAPS       EQU LOADED_BACKEND + 1
-UNET_ABI        EQU UNET_CAPS + 2
-ENV_VALUE       EQU UNET_ABI + 2
-; DSS ENV_GET has no destination-capacity argument. ENV_SET limits a complete
-; NAME=VALUE string to 255 bytes, so reserve 256 bytes for every returned value.
-ENV_VALUE_SIZE  EQU 256
-DLL_INFO        EQU ENV_VALUE + ENV_VALUE_SIZE
-DLL_INFO_SIZE   EQU 32
-CFG_PATH        EQU DLL_INFO + DLL_INFO_SIZE
+        ASSERT  UNETLD.STATE_SIZE = 315
+STATE_FLAGS     EQU UNETLD.STATE_END
+EXIT_CODE       EQU STATE_FLAGS + 1
+        IFDEF WEATHER_GRAPHICS
+; The selected name in UNETLD state is overwritten by every SELECT. Preserve
+; the actually loaded name so the graphics client can retain a matching DLL.
+LOADED_DLL_NAME EQU EXIT_CODE + 1
+LOADED_DLL_NAME_SIZE EQU 13
+CFG_PATH        EQU LOADED_DLL_NAME + LOADED_DLL_NAME_SIZE
+        ELSE
+CFG_PATH        EQU EXIT_CODE + 1
+        ENDIF
 CFG_PATH_SIZE   EQU 272
 CFG_FILE_BUFFER EQU CFG_PATH + CFG_PATH_SIZE
 CFG_FILE_MAX    EQU 1024
@@ -1100,7 +913,7 @@ BSS_SIZE        EQU BSS_END - BSS_BASE
         ASSERT  TRANSPORT_DETAIL + TRANSPORT_DETAIL_SIZE <= CFG_FILE_BUFFER + CFG_FILE_MAX
 
         IFDEF WEATHER_GRAPHICS
-STACK_SIZE      EQU 0600h
+STACK_SIZE      EQU 0400h
         ELSE
 STACK_SIZE      EQU 0600h
         ENDIF
@@ -1118,9 +931,8 @@ IMAGE_END       EQU $
         ; Both clients live in WIN2 now; nothing of ours may sit in WIN1, which
         ; DSS's SETVMOD commandeers for the BIOS text-screen copy.
         ASSERT  IMAGE_END < 0C000h
-        ASSERT  STACK_TOP <= 0C000h
-        ASSERT  ENV_VALUE + ENV_VALUE_SIZE <= 0C000h
-        ASSERT  DLL_INFO + DLL_INFO_SIZE <= 0C000h
+        ASSERT  STACK_TOP <= 0BF80h      ; keep at least #80 free in WIN2
+        ASSERT  UNETLD.STATE_END <= 0C000h
         ASSERT  BSS_END < STACK_TOP
 
         ENDMODULE

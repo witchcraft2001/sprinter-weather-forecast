@@ -83,6 +83,7 @@ START:
         CALL    TEST_INVALID_FIELDS
         CALL    TEST_PARSER_LIMITS
         CALL    TEST_BUFFER_LIMIT
+        CALL    TEST_TRANSPORT_CANCEL
         CALL    T_END
         HALT
 
@@ -509,10 +510,102 @@ RESET_RESPONSE:
         CALL    T_EXPECT_Z
         RET
 
-; Never called by these tests; required by included production transport.
-CALL_UNET:
+TEST_TRANSPORT_CANCEL:
+        CALL    SETUP_TRANSPORT_CONFIG
+        LD      A, FAKE_CANCEL_CONNECT
+        LD      (FAKE_UNET_MODE), A
+        CALL    MAIN.GOPHER_FETCH
+        LD      A, 90
+        CALL    T_EXPECT_C
+        LD      A, (TRANSPORT_STAGE)
+        CP      MAIN.TST_CONNECT
+        LD      A, 91
+        CALL    T_EXPECT_Z
+        LD      A, (TRANSPORT_CODE)
+        CP      NERR_CANCEL
+        LD      A, 92
+        CALL    T_EXPECT_Z
+
+        CALL    SETUP_TRANSPORT_CONFIG
+        LD      A, FAKE_CANCEL_RECV
+        LD      (FAKE_UNET_MODE), A
+        CALL    MAIN.GOPHER_FETCH
+        LD      A, 93
+        CALL    T_EXPECT_C
+        LD      A, (TRANSPORT_STAGE)
+        CP      MAIN.TST_RECV
+        LD      A, 94
+        CALL    T_EXPECT_Z
+        LD      A, (TRANSPORT_CODE)
+        CP      NERR_CANCEL
+        LD      A, 95
+        CALL    T_EXPECT_Z
+        LD      A, (STATE_FLAGS)
+        AND     FLAG_CHANNEL_OPEN
+        LD      A, 96
+        CALL    T_EXPECT_NZ
+        XOR     A
+        LD      (STATE_FLAGS), A
+        LD      (FAKE_UNET_MODE), A
+        RET
+
+SETUP_TRANSPORT_CONFIG:
+        LD      HL, TRANSPORT_HOST
+        LD      DE, CFG_HOST
+        CALL    COPY_Z
+        LD      HL, TRANSPORT_PORT
+        LD      DE, CFG_PORT
+        CALL    COPY_Z
+        LD      HL, TRANSPORT_SELECTOR
+        LD      DE, CFG_SELECTOR
+        CALL    COPY_Z
+        XOR     A
+        LD      (CFG_LOCATION), A
+        LD      (STATE_FLAGS), A
+        RET
+
+COPY_Z:
+        LD      A, (HL)
+        LD      (DE), A
+        INC     HL
+        INC     DE
+        OR      A
+        JR      NZ, COPY_Z
+        RET
+
+FAKE_CANCEL_CONNECT     EQU 1
+FAKE_CANCEL_RECV        EQU 2
+
+; Fake UNET dispatcher used by the production GOPHER_FETCH cancellation tests.
+        MODULE  UNETLD
+CALL:
+        LD      A, (FAKE_UNET_MODE)
+        CP      FAKE_CANCEL_CONNECT
+        JR      NZ, .CHECK_RECV
+        LD      A, B
+        CP      UNET_FN_CONNECT
+        JR      Z, .CANCEL
+.CHECK_RECV:
+        LD      A, (FAKE_UNET_MODE)
+        CP      FAKE_CANCEL_RECV
+        JR      NZ, .SUCCESS
+        LD      A, B
+        CP      UNET_FN_RECV
+        JR      Z, .CANCEL
+.SUCCESS:
+        LD      A, B
+        CP      UNET_FN_SEND
+        JR      NZ, .OK
+        PUSH    IX
+        POP     DE
+.OK:
         XOR     A
         RET
+.CANCEL:
+        LD      A, NERR_CANCEL
+        OR      A
+        RET
+        ENDMODULE
 
         MODULE  MAIN
         INCLUDE "wx1.asm"
@@ -523,6 +616,10 @@ DOT:                    DB '.'
 NUMBER_164:             DB "164",0
 NUMBER_MIN:             DB "-32768",0
 NUMBER_OVERFLOW:        DB "32768",0
+TRANSPORT_HOST:         DB "example.org",0
+TRANSPORT_PORT:         DB "70",0
+TRANSPORT_SELECTOR:     DB "/weather/zx",0
+FAKE_UNET_MODE:         DB 0
 CR:                     DB 13
 LF:                     DB 10
 PREFIX_CRLF:

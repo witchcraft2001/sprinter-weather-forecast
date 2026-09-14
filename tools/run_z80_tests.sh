@@ -26,7 +26,28 @@ byte_at() { byte_at_file "$dump" "$1"; }
   echo "FAIL z80 response harness: assertion $(byte_at 57346), failures=$(byte_at 57347)" >&2
   exit 1
 }
-echo "Z80 response harness: OK (whole, bytewise and every two-chunk split)"
+echo "Z80 response harness: OK (stream splits, validation and UNET cancellation)"
+
+unetld_bin="$build_dir/t_unetld_select.bin"
+unetld_dump="$build_dir/t_unetld_select.out"
+sjasmplus --nologo --fullpath \
+  -I "$repo_root/src" -I "$repo_root/tests/z80" \
+  -I "$repo_root/extern/unet_libs_asm/include" \
+  -I "$repo_root/extern/unet_libs_asm/extern/core/bindings/asm" \
+  --raw="$unetld_bin" "$repo_root/tests/z80/t_unetld_select.asm"
+rm -f "$unetld_dump"
+"$ticks" -pc 0 -counter 2000000 -output "$unetld_dump" "$unetld_bin" >/dev/null 2>&1 || true
+[[ -f "$unetld_dump" ]] || { echo "FAIL Z80 UNETLD harness: no memory dump" >&2; exit 1; }
+[[ "$(byte_at_file "$unetld_dump" 57345)" == "165" ]] || {
+  echo "FAIL Z80 UNETLD harness: incomplete" >&2
+  exit 1
+}
+[[ "$(byte_at_file "$unetld_dump" 57344)" == "0" ]] || {
+  echo "FAIL Z80 UNETLD harness: assertion $(byte_at_file "$unetld_dump" 57346)," \
+    "failures=$(byte_at_file "$unetld_dump" 57347)" >&2
+  exit 1
+}
+echo "Z80 UNETLD harness: OK (selection, load/ABI/TCP, SETOPT, NETSTART and unload lifecycle)"
 
 config_bin="$build_dir/t_config.bin"
 config_dump="$build_dir/t_config.out"

@@ -89,21 +89,25 @@ GRAPHICS_FINALIZE:
         LD      HL, (GFX_HANDLE)
         CALL    LIBMAN.l_free
 .ASSETS:
-        CALL    FREE_UNET
         JP      GRAPHICS_FREE_ASSETS
 
-; Z means that the validated backend already occupies its libman handle.
-; NZ means that the normal loader path must load (or replace) it.
+; CF=1 means that the required re-SELECT failed after replacing a backend.
+; With CF=0, Z means that the validated backend already occupies its libman
+; handle; NZ means that the normal loader path must load (or replace) it.
 GRAPHICS_REUSE_UNET:
-        LD      A, (STATE_FLAGS)
-        AND     FLAG_DLL_LOADED
+        LD      A, (UNETLD.FLAGS)
+        AND     UNETLD_F_LOADED
         JR      Z, .LOAD
-        LD      A, (LOADED_BACKEND)
-        LD      C, A
-        LD      A, (BACKEND)
-        CP      C
+        LD      HL, UNETLD.DLL_NAME
+        LD      DE, LOADED_DLL_NAME
+        CALL    STREQ
         RET     Z
         CALL    FREE_UNET
+        ; UNLOAD resets the selector state. NET was valid a moment ago, so
+        ; repeat SELECT to rebuild the requested name before LOAD. Do not hide
+        ; a real DSS/ENV failure if the environment changed between the reads.
+        CALL    UNETLD.SELECT
+        RET     C
 .LOAD:  OR      1
         RET
 
@@ -367,12 +371,11 @@ GRAPHICS_SHOW_HELP:
         CALL    GRAPHICS_BUFFER_START
         LD      HL, MSG_GRAPHICS_HELP_VERSION
         CALL    GRAPHICS_BUFFER_APPEND
-        LD      A, (LOADED_BACKEND)
-        CP      BACKEND_WIFI
-        LD      HL, MSG_GRAPHICS_HELP_BACKEND_ESP
-        JR      Z, .VERSION_BACKEND
-        LD      HL, MSG_GRAPHICS_HELP_BACKEND_RTL
-.VERSION_BACKEND:
+        LD      HL, MSG_GRAPHICS_HELP_BACKEND_OPEN
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      HL, UNETLD.NET_TAG
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      HL, MSG_GRAPHICS_HELP_BACKEND_CLOSE
         CALL    GRAPHICS_BUFFER_APPEND
         CALL    GRAPHICS_BUFFER_DONE
         LD      HL, GRAPHICS_HELP_LINES
@@ -625,12 +628,9 @@ GRAPHICS_DRAW_FOOTER:
         CALL    GRAPHICS_BUFFER_START
         LD      HL, WX1_MODEL + WM_SOURCE
         CALL    GRAPHICS_BUFFER_APPEND
-        LD      A, (BACKEND)
-        CP      BACKEND_WIFI
-        LD      HL, MSG_GRAPHICS_BACKEND_WIFI
-        JR      Z, .BACKEND
-        LD      HL, MSG_GRAPHICS_BACKEND_RTL
-.BACKEND:
+        LD      HL, MSG_GRAPHICS_BACKEND_PREFIX
+        CALL    GRAPHICS_BUFFER_APPEND
+        LD      HL, UNETLD.NET_TAG
         CALL    GRAPHICS_BUFFER_APPEND
         CALL    GRAPHICS_BUFFER_DONE
         LD      IX, 8

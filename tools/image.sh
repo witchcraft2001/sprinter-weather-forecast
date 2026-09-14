@@ -23,8 +23,9 @@ cp "$repo_root/build/WEATHER.EXE" "$stage/WEATHER.EXE"
 cp "$repo_root/build/WEATHERC.EXE" "$stage/WEATHERC.EXE"
 cp "$repo_root/build/AFNT320.DLL" "$stage/AFNT320.DLL"
 cp "$repo_root/build/GFX320.DLL" "$stage/GFX320.DLL"
-cp "$repo_root/build/UNETESP.DLL" "$stage/UNETESP.DLL"
-cp "$repo_root/build/UNETRTL.DLL" "$stage/UNETRTL.DLL"
+for dll in "${UNET_DLLS[@]}"; do
+  cp "$repo_root/build/$dll" "$stage/$dll"
+done
 cp "$repo_root/resources/WEATHER.CFG.sample" "$stage/WEATHER.SMP"
 sed 's/$/'$'\r''/' "$repo_root/resources/README.ru.txt" |
   iconv -f UTF-8 -t CP866 > "$stage/README.TXT"
@@ -49,11 +50,37 @@ if [[ "${WEATHER_DEBUG_CFG:-0}" == "1" ]]; then
 fi
 
 listing="$(mdir -b -i "$image" ::)"
+actual_files="$(sed 's#^::/##' <<< "$listing" | sort)"
+expected_artifacts=("${DIST_FILES[@]}")
+if [[ "${WEATHER_DEBUG_CFG:-0}" == "1" ]]; then
+  expected_artifacts+=("WEATHER.CFG" "GFXTEST.EXE")
+fi
+expected_files="$(printf '%s\n' "${expected_artifacts[@]}" | sort)"
+if [[ "$actual_files" != "$expected_files" ]]; then
+  echo "Error: FAT12 file set differs from the distribution manifest" >&2
+  diff -u <(printf '%s\n' "$expected_files") <(printf '%s\n' "$actual_files") >&2 || true
+  exit 1
+fi
 for artifact in "${DIST_FILES[@]}"; do
   if ! grep -q "/$artifact$" <<< "$listing"; then
     echo "Error: $artifact is missing from FAT12 image" >&2
     exit 1
   fi
 done
+
+verify_dir="$repo_root/build/image/verify"
+mkdir -p "$verify_dir"
+for dll in "${UNET_DLLS[@]}"; do
+  mcopy -o -i "$image" "::$dll" "$verify_dir/$dll"
+  if ! cmp -s "$repo_root/build/$dll" "$verify_dir/$dll"; then
+    echo "Error: $dll in FAT12 image differs from the core manifest copy" >&2
+    exit 1
+  fi
+done
+mcopy -o -i "$image" ::WEATHER.SMP "$verify_dir/WEATHER.SMP"
+if ! cmp -s "$repo_root/resources/WEATHER.CFG.sample" "$verify_dir/WEATHER.SMP"; then
+  echo "Error: WEATHER.SMP in FAT12 image differs from the source template" >&2
+  exit 1
+fi
 
 echo "Created FAT12 image: $image"

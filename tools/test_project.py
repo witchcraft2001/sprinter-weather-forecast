@@ -5,18 +5,21 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
+import re
 import struct
 import zipfile
+from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
 
-EXPECTED_DLLS = {
-    "UNETESP.DLL": "2bf4f90afbbdf34a68e486def7c5bc5cc17be4361f77cecb52004068c4ab5455",
-    "UNETRTL.DLL": "8881b534306efb00b2c871ed7044bb2c2310fb8b25b33e01880239c81632160c",
-}
+UNET_MANIFEST = json.loads(
+    (ROOT / "extern/unet_libs_asm/extern/core/dll/manifest.json").read_text(
+        encoding="utf-8"
+    )
+)
+EXPECTED_DLLS = {name: entry["sha256"] for name, entry in UNET_MANIFEST.items()}
 
 
 def require(condition: bool, message: str) -> None:
@@ -30,6 +33,10 @@ def check_runtime_files() -> None:
     for name, expected_hash in EXPECTED_DLLS.items():
         data = (BUILD / name).read_bytes()
         require(hashlib.sha256(data).hexdigest() == expected_hash, f"{name} changed while staging")
+    require(
+        {path.name for path in BUILD.glob("UNET*.DLL")} == set(EXPECTED_DLLS),
+        "build UNET DLL set differs from the core manifest",
+    )
 
 
 def check_messages() -> None:
@@ -79,11 +86,35 @@ def check_source_contract() -> None:
         for name in ("weather.asm", "graphics_ui.asm")
     )
     source = console_source + "\n" + graphics_source
+    setup_start = weather_source.index("        CALL    UNETLD.SELECT")
+    setup_end = weather_source.index("        CALL    GOPHER_FETCH", setup_start)
+    setup_source = weather_source[setup_start:setup_end]
+    setup_steps = (
+        "CALL    UNETLD.SELECT",
+        "CALL    UNETLD.LOAD",
+        "CALL    UNETLD.REQUIRE",
+        "LD      A, UNET_OPT_CANCELKEYS",
+        "CALL    UNETLD.CALL",
+        "CALL    UNETLD.NETSTART",
+    )
+    setup_positions = [setup_source.index(step) for step in setup_steps]
+    require(
+        setup_positions == sorted(setup_positions),
+        "network setup must follow SELECT/LOAD/REQUIRE/SETOPT/NETSTART order",
+    )
     for token in (
         'INCLUDE "libman.asm"',
-        "UNET_FN_GETCAPS",
-        "UNET_FN_STATUS",
-        "UNET_FN_NETINIT",
+        'INCLUDE "unetld.asm"',
+        "UNETLD.RESET",
+        "UNETLD.SELECT",
+        "UNETLD.LOAD",
+        "UNETLD.REQUIRE",
+        "UNETLD.NETSTART",
+        "UNETLD.CALL",
+        "UNETLD.UNLOAD",
+        "UNETLD_STATE_BASE",
+        "UNET_OPT_CANCELKEYS",
+        "NERR_CANCEL",
         "UNET_FN_NETDONE",
         "UNET_FN_CONNECT",
         "UNET_FN_SEND",
@@ -94,13 +125,48 @@ def check_source_contract() -> None:
         "LIBMAN_DIAGNOSTICS",
         "LIBMAN.l_load_stage",
         "LIBMAN.l_init_status",
-        "LIBMAN.l_info",
         "LIBMAN.l_call",
         "LIBMAN.l_free",
     ):
         require(token in source, f"runtime contract token is missing: {token}")
+    for token in ("SELECT_BACKEND", "CALL_UNET", "BACKEND_WIFI", "BACKEND_RTL", "UNETESP.DLL", "UNETRTL.DLL"):
+        require(token not in source, f"runtime must not contain a known-backend list: {token}")
     require((ROOT / "src" / "config.asm").is_file(), "configuration module is missing")
     require((ROOT / "src" / "transport.asm").is_file(), "Gopher transport module is missing")
+    dss_path = ROOT / "src" / "dss.inc"
+    require(dss_path.is_file(), "local minimal DSS bindings are missing")
+    dss_source = dss_path.read_text(encoding="utf-8")
+    for name, value in {
+        "DSS": "010h",
+        "DSS_OPEN_FILE": "011h",
+        "DSS_CLOSE_FILE": "012h",
+        "DSS_READ_FILE": "013h",
+        "DSS_MOVE_FP": "015h",
+        "DSS_WAITKEY": "030h",
+        "DSS_KCLEAR": "035h",
+        "DSS_SETWIN1": "039h",
+        "DSS_SETWIN3": "03Bh",
+        "DSS_GETMEM": "03Dh",
+        "DSS_FREEMEM": "03Eh",
+        "DSS_EXIT": "041h",
+        "DSS_ENVIRON": "046h",
+        "DSS_APPINFO": "047h",
+        "DSS_SETVMOD": "050h",
+        "DSS_GETVMOD": "051h",
+        "DSS_PUTCHAR": "05Bh",
+        "DSS_PCHARS": "05Ch",
+        "ENV_GET": "001h",
+        "APPINFO_EXE_HOMEDIR": "001h",
+        "SEEK_END": "2",
+        "FM_READ": "1",
+        "E_FILE_NOT_FOUND": "3",
+        "DSS_VMOD_G320": "081h",
+    }.items():
+        require(
+            re.search(rf"^{name}\s+EQU\s+{value}$", dss_source, re.MULTILINE)
+            is not None,
+            f"local DSS binding differs from Estex DSS: {name}",
+        )
     require((ROOT / "src" / "wx1.asm").is_file(), "WX1 parser module is missing")
     require((ROOT / "src" / "text_ui.asm").is_file(), "text UI module is missing")
     for token in (
@@ -155,6 +221,7 @@ def check_source_contract() -> None:
         "LOCATION=Almaty,KZ",
         "NET=WIFI",
         "NET=RTL",
+        "NET=509B",
     ):
         require(
             config_detail in distribution_readme,
@@ -171,6 +238,37 @@ def check_source_contract() -> None:
             encoding="utf-8"
         ),
         "the WEATHER.CFG parser needs its Z80 regression harness",
+    )
+    require(
+        (ROOT / "tests" / "z80" / "t_unetld_select.asm").is_file()
+        and "Z80 UNETLD harness" in (ROOT / "tools" / "run_z80_tests.sh").read_text(
+            encoding="utf-8"
+        ),
+        "UNETLD backend selection needs its Z80 regression harness",
+    )
+    unetld_harness = (ROOT / "tests" / "z80" / "t_unetld_select.asm").read_text(
+        encoding="utf-8"
+    )
+    for scenario in (
+        "TEST_WIFI_ALIAS",
+        "TEST_DIRECT_TAG",
+        "TEST_NO_ENV",
+        "TEST_BAD_LENGTHS",
+        "TEST_BAD_CHARACTER",
+        "TEST_LOAD_MISSING",
+        "TEST_WRONG_DLL_NAME",
+        "TEST_BAD_ABI",
+        "TEST_NO_TCP",
+        "TEST_NETSTART_SUCCESS",
+        "TEST_NETSTART_STATUS",
+        "TEST_UNLOAD_IDEMPOTENT",
+    ):
+        require(scenario in unetld_harness, f"UNETLD harness scenario is missing: {scenario}")
+    require(
+        "TEST_TRANSPORT_CANCEL" in (ROOT / "tests" / "z80" / "t_response.asm").read_text(
+            encoding="utf-8"
+        ),
+        "transport harness must exercise UNET cancellation",
     )
     config_source = (ROOT / "src" / "config.asm").read_text(encoding="utf-8")
     require(
@@ -347,14 +445,13 @@ def check_source_contract() -> None:
         "WC_DIRECTION",
         "WD_PRECIPITATION",
         "GRAPHICS_FORMAT_DAY_LABEL",
-        "MSG_GRAPHICS_BACKEND_WIFI",
-        "MSG_GRAPHICS_BACKEND_RTL",
+        "MSG_GRAPHICS_BACKEND_PREFIX",
         "GRAPHICS_SHOW_HELP",
         "MSG_GRAPHICS_HELP_VERSION",
         "MSG_GRAPHICS_HELP_AUTHOR",
-        "MSG_GRAPHICS_HELP_BACKEND_ESP",
-        "MSG_GRAPHICS_HELP_BACKEND_RTL",
-        "LD      A, (LOADED_BACKEND)",
+        "MSG_GRAPHICS_HELP_BACKEND_OPEN",
+        "MSG_GRAPHICS_HELP_BACKEND_CLOSE",
+        "LD      HL, UNETLD.NET_TAG",
         "CP      3Bh",
     ):
         require(token in graphics_ui_source, f"final graphical layout is missing: {token}")
@@ -384,8 +481,18 @@ def check_source_contract() -> None:
     )
     require("ANTONFNT" not in source, "runtime must not reference legacy ANTONFNT")
     require(
-        "ENV_VALUE_SIZE  EQU 256" in source,
-        "ENV_GET buffer must cover DSS's maximum environment value",
+        "ASSERT  UNETLD.STATE_SIZE = 315" in source,
+        "compact UNETLD state must reserve the complete 315-byte block",
+    )
+    require(
+        "ASSERT  STACK_TOP <= 0BF80h" in weather_source,
+        "WIN2 layout must retain at least #80 bytes above the stack",
+    )
+    require(
+        "CALL    GRAPHICS_REUSE_UNET\n        JP      C, ERROR_CONFIG\n"
+        "        JP      Z, UNET_READY" in weather_source
+        and "CALL    UNETLD.SELECT\n        RET     C\n.LOAD:" in graphics_ui_source,
+        "graphics backend replacement must propagate a repeated SELECT failure",
     )
 
 
@@ -418,12 +525,15 @@ def check_zip_if_present() -> None:
     with zipfile.ZipFile(archive) as package:
         names = sorted(package.namelist())
         sample = package.read("WEATHER.SMP")
+        for name, expected_hash in EXPECTED_DLLS.items():
+            digest = hashlib.sha256(package.read(name)).hexdigest()
+            require(digest == expected_hash, f"{name} in ZIP differs from the core manifest")
     require(
         all("/" not in name and len(name.split(".")[0]) <= 8 and len(name.rsplit(".", 1)[-1]) <= 3 for name in names),
         f"ZIP contains a directory or a non-8.3 name: {names}",
     )
     require(
-        names == ["AFNT320.DLL", "GFX320.DLL", "README.TXT", "UNETESP.DLL", "UNETRTL.DLL", "WEATHER.EXE", "WEATHER.SMP", "WEATHERC.EXE"],
+        names == sorted(["AFNT320.DLL", "GFX320.DLL", "README.TXT", "WEATHER.EXE", "WEATHER.SMP", "WEATHERC.EXE", *EXPECTED_DLLS]),
         f"unexpected ZIP contents: {names}",
     )
     require(

@@ -29,8 +29,9 @@ git submodule update --init --recursive
 - `zip` для `make package`;
 - `mtools` (`mformat`, `mcopy`, `mdir`) для `make image`.
 
-Готовые `UNETESP.DLL` и `UNETRTL.DLL` берутся из закреплённых сабмодулей и
-никогда не пересобираются этим проектом.
+Готовые `UNET*.DLL` берутся из манифеста закреплённого рекурсивного сабмодуля
+`extern/unet_libs_asm` и никогда не пересобираются этим проектом. Текущий
+комплект: `UNETESP.DLL`, `UNETRTL.DLL` и `UNET509B.DLL`.
 
 ## Сборка
 
@@ -49,16 +50,22 @@ make debug-image
 - `build/WEATHER.EXE`;
 - `build/WEATHERC.EXE`;
 - `distr/weather-forecast.zip`;
-- `distr/weather-forecast.img`.
+- `distr/weather-forecast.img`;
 - `distr/weather-debug.img` — диагностический образ с test `WEATHER.CFG`.
 
 Перед запуском на Sprinter сеть должна быть поднята:
 
 - ESP/Wi-Fi: `NETUP`, публикующий `NET=WIFI`;
-- RTL8019A: `NETCFG -i`, затем `IFUP`, публикующие `NET=RTL`.
+- RTL8019A: `NETCFG -i`, затем `IFUP`, публикующие `NET=RTL`;
+- 3Com 3C509B: `NETCFG -i`, затем `IFUP` из кита 3C509B, публикующие
+  `NET=509B`.
 
-DLL должны лежать рядом с `WEATHERC.EXE`. Актуальный libman также умеет
-использовать текущий каталог как fallback.
+Стандартный `UNETLD` принимает без учёта регистра тег из 3–4 символов
+`[A-Z0-9]` и загружает `UNET<TAG>.DLL`; исключение `NET=WIFI` преобразуется в
+`UNETESP.DLL`. Поэтому новый совместимый TCP backend можно добавить рядом с
+EXE без пересборки программы. Перед запуском всегда выполните утилиту настройки
+выбранного backend. Актуальный libman умеет использовать текущий каталог как
+fallback.
 
 `WEATHER.CFG` необязателен. Без него используется
 `go.sprinter.ru:70/weather/zx`. Дистрибутив содержит безопасный шаблон
