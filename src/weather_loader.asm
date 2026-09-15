@@ -289,7 +289,7 @@ L_TRAMPOLINE_END:
 L_MAGIC:                DB "WFG2"
 L_USAGE:                DB "Usage: WEATHER [minutes]", 13, 10, 0
 L_BANNER:
-        DB      "Weather Forecast v.0.1.2 by Dmitry Mikhalchenkov.", 13, 10, 0
+        DB      "Weather Forecast v.0.2.1 by Dmitry Mikhalchenkov.", 13, 10, 0
 L_FILE_HANDLE:          DB 0FFh
 L_RUNTIME_BLOCK:        DB 0
 L_ASSET_BLOCK:          DB 0
