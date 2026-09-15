@@ -615,7 +615,8 @@ def check_source_contract() -> None:
         "MSG_GRAPHICS_BACKEND_PREFIX",
         "GRAPHICS_SHOW_HELP",
         "MSG_GRAPHICS_HELP_VERSION",
-        "MSG_GRAPHICS_HELP_AUTO",
+        "MSG_GRAPHICS_HELP_AUTHOR",
+        "MSG_GRAPHICS_HELP_FIDONET",
         "MSG_GRAPHICS_HELP_BACKEND_OPEN",
         "MSG_GRAPHICS_HELP_BACKEND_CLOSE",
         "LD      HL, UNETLD.NET_TAG",
@@ -652,13 +653,11 @@ def check_source_contract() -> None:
         "help must keep the clock live while pausing the refresh countdown",
     )
     require(
-        "Часы" in message_catalogue["MSG_GRAPHICS_HELP_AUTO"]
-        and "автообновление" in message_catalogue["MSG_GRAPHICS_HELP_AUTO"]
-        and "Сбой" in message_catalogue["MSG_GRAPHICS_HELP_RETURN"]
+        "Dmitry Mikhalchenkov" in message_catalogue["MSG_GRAPHICS_HELP_AUTHOR"]
+        and "2:5030/1997.10" in message_catalogue["MSG_GRAPHICS_HELP_FIDONET"]
         and "клавиша" in message_catalogue["MSG_GRAPHICS_HELP_BACK"]
-        and "1..1440" in message_catalogue["MSG_GRAPHICS_HELP_2"]
         and "2:5030/1997.10" in distribution_readme,
-        "help must describe the clock, refresh retention and WEATHER N syntax",
+        "help must identify the author and FidoNet address",
     )
     require(
         "LD      IX, 276" in graphics_ui_source
