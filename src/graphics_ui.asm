@@ -151,7 +151,7 @@ GRAPHICS_BEGIN_ATTEMPT:
         RET
 .STATUS:
         LD      HL, MSG_GRAPHICS_STAGE
-        CALL    GRAPHICS_SHOW_STATUS_SCREEN
+        CALL    GRAPHICS_SHOW_STATUS
         RET     NC
 .ACTIVE_FAIL:
         CALL    GRAPHICS_RESTORE_MODE
@@ -177,43 +177,22 @@ GRAPHICS_INIT_STEP:
         RET
 
 GRAPHICS_RENDER_FORECAST:
+        LD      A, (GRAPHICS_SHOWN)
+        OR      A
+        JR      NZ, .LOCAL
         CALL    GRAPHICS_FADE_OUT
         RET     C
         CALL    GRAPHICS_DRAW
         RET     C
         CALL    GRAPHICS_FADE_IN
         RET     C
-        ; WAITKEY spins on the keyboard ring buffer, which only the 50 Hz
-        ; handler refills.  Entering it with interrupts disabled hangs the
-        ; machine outright, so never take the caller's IFF on trust here.
-.WAIT:  EI
-        LD      C, DSS_KCLEAR
-        RST     DSS
-        LD      C, DSS_WAITKEY
-        RST     DSS
-        OR      A
-        JR      NZ, .ASCII
-        LD      A, D                    ; extended key position code
-        AND     7Fh
-        CP      3Bh                     ; F1, verified against DSS key table
-        JR      NZ, .WAIT
-        CALL    GRAPHICS_SHOW_HELP
+        JR      .MARK
+.LOCAL: CALL    GRAPHICS_DRAW_REFRESH
         RET     C
-        JR      .WAIT
-.ASCII:
-        CP      27
-        JR      Z, .EXIT
-        CP      13
-        JR      Z, .REFRESH
-        CP      'R'
-        JR      Z, .REFRESH
-        CP      'r'
-        JR      NZ, .WAIT
-.REFRESH:
-        JP      ATTEMPT_START
-.EXIT:
-        LD      B, EXIT_OK
-        JP      EXIT_PROGRAM
+.MARK:  LD      A, 1
+        LD      (GRAPHICS_SHOWN), A
+        LD      HL, MSG_GRAPHICS_HINT
+        JP      GRAPHICS_SHOW_STATUS
 
 GRAPHICS_LOAD_LIBRARIES:
         ; Not "is the handle zero": libman hands back a table index in L with
@@ -287,28 +266,48 @@ GRAPHICS_LOAD_LIBRARIES:
         RET
 
 ; HL points to a CP866 ASCIIZ status/error message.
-; This full-screen form is used only when entering the progress state. Later
-; network transitions update the status band in place.
+; Before the first forecast, every network transition uses this same centered
+; line and clears the screen first. Once a forecast is visible, transitions
+; update only the bottom status band and leave the forecast intact.
 GRAPHICS_SHOW_STATUS_SCREEN:
         LD      DE, MSG_GRAPHICS_BUSY_HINT
         LD      A, 0Eh
         JR      GRAPHICS_SHOW_MESSAGE
 
 GRAPHICS_SHOW_STATUS:
+        LD      A, (GRAPHICS_SHOWN)
+        OR      A
+        JP      Z, GRAPHICS_SHOW_STATUS_SCREEN
+        LD      A, 0Eh
+        JR      GRAPHICS_PRINT_STATUS
+
+GRAPHICS_SHOW_STATUS_ERROR:
+        LD      A, 0Ch
+
+GRAPHICS_PRINT_STATUS:
+        LD      (GRAPHICS_LAST_MESSAGE), HL
+        LD      (GRAPHICS_MESSAGE_COLOR), A
+        PUSH    AF
         PUSH    HL
         CALL    GRAPHICS_CLEAR_STATUS
         JR      C, .DROP_FAIL
         POP     DE
+        POP     AF
         LD      IX, 12
-        LD      IY, 92
-        LD      A, 0Eh
+        LD      IY, 240
         JP      GRAPHICS_PRINT
 .DROP_FAIL:
         POP     HL
+        POP     AF
         SCF
         RET
 
 GRAPHICS_SHOW_ERROR:
+        LD      A, (GRAPHICS_SHOWN)
+        OR      A
+        JR      Z, .FULL_ERROR
+        JP      GRAPHICS_SHOW_STATUS_ERROR
+.FULL_ERROR:
         PUSH    HL
         LD      DE, MSG_GRAPHICS_HINT
         LD      A, 0Ch
@@ -330,6 +329,7 @@ GRAPHICS_ERROR_FALLBACK:
         RET
 
 GRAPHICS_SHOW_MESSAGE:
+        LD      (GRAPHICS_LAST_MESSAGE), HL
         LD      (GRAPHICS_MESSAGE_COLOR), A
         PUSH    DE
         PUSH    HL
@@ -350,7 +350,9 @@ GRAPHICS_SHOW_MESSAGE:
         LD      IX, 12
         LD      IY, 238
         LD      A, 07h
-        JP      GRAPHICS_PRINT
+        CALL    GRAPHICS_PRINT
+        RET     C
+        JP      GRAPHICS_DRAW_CLOCK
 .FOOTER_FAIL:
         POP     DE
         SCF
@@ -380,7 +382,7 @@ GRAPHICS_SHOW_HELP:
         CALL    GRAPHICS_BUFFER_DONE
         LD      HL, GRAPHICS_HELP_LINES
         LD      (GRAPHICS_DAY_MODEL_PTR), HL
-        LD      A, 6
+        LD      A, 7
         LD      (GRAPHICS_DAY_LEFT), A
         LD      IY, 12
 .LINE:
@@ -402,27 +404,100 @@ GRAPHICS_SHOW_HELP:
         DEC     A
         LD      (GRAPHICS_DAY_LEFT), A
         JR      NZ, .LINE
+        CALL    GRAPHICS_DRAW_CLOCK
+        RET     C
         CALL    GRAPHICS_FADE_IN
         RET     C
-        LD      C, DSS_WAITKEY
-        RST     DSS
+        CALL    GRAPHICS_WAIT_KEY
+        RET     C
         CALL    GRAPHICS_FADE_OUT
         RET     C
+        LD      A, (GRAPHICS_SHOWN)
+        OR      A
+        JR      NZ, .FORECAST
+        ; The event loop is entered only after an attempt finishes. If no
+        ; forecast has ever been shown, the remembered full-screen message is
+        ; therefore the error from that attempt.
+        LD      HL, (GRAPHICS_LAST_MESSAGE)
+        LD      DE, MSG_GRAPHICS_HINT
+        LD      A, (GRAPHICS_MESSAGE_COLOR)
+        CALL    GRAPHICS_SHOW_MESSAGE
+        RET     C
+        JP      GRAPHICS_FADE_IN
+.FORECAST:
         CALL    GRAPHICS_DRAW
+        RET     C
+        LD      HL, (GRAPHICS_LAST_MESSAGE)
+        LD      A, (GRAPHICS_MESSAGE_COLOR)
+        CALL    GRAPHICS_PRINT_STATUS
         RET     C
         JP      GRAPHICS_FADE_IN
 
-; ATTEMPT_FINISH uses this for errors. If graphics initialization itself
-; failed, retain the console fallback because AFNT320 is unavailable.
-GRAPHICS_RENDER_PROMPT:
-        LD      A, (GRAPHICS_MODE_ACTIVE)
+; Help pauses the refresh countdown while it owns the screen.
+GRAPHICS_WAIT_KEY:
+.WAIT:  EI
+        HALT
+        LD      C, DSS_SCANKEY
+        RST     DSS
+        JR      NZ, .KEY
+        CALL    GRAPHICS_FRAME_CLOCK
+        JR      NC, .WAIT
+        RET
+.KEY:
         OR      A
-        JP      Z, TEXT_RENDER_PROMPT
-        LD      DE, MSG_GRAPHICS_HINT
-        LD      IX, 12
-        LD      IY, 238
-        LD      A, 07h
-        JP      GRAPHICS_PRINT
+        RET
+
+GRAPHICS_EVENT_LOOP:
+.FRAME: EI
+        HALT
+        LD      C, DSS_SCANKEY
+        RST     DSS
+        JR      Z, .TICK
+        OR      A
+        JR      Z, .EXTENDED
+.ASCII: CP      27
+        JR      Z, .EXIT
+        CP      13
+        JR      Z, .REFRESH
+        AND     0DFh
+        CP      'R'
+        JR      Z, .REFRESH
+        JR      .TICK
+.EXTENDED:
+        LD      A, D
+        AND     7Fh
+        CP      3Bh
+        JR      NZ, .TICK
+.HELP:  CALL    GRAPHICS_SHOW_HELP
+        JR      C, GRAPHICS_EXIT_ERROR
+        JR      .FRAME
+.TICK:  CALL    GRAPHICS_FRAME_CLOCK
+        JR      C, GRAPHICS_EXIT_ERROR
+        JR      Z, .FRAME
+        CALL    GRAPHICS_TIMER_SECOND
+        JR      NC, .FRAME
+.REFRESH:
+        JP      ATTEMPT_START
+.EXIT:  LD      A, (LAST_ATTEMPT_EXIT)
+        LD      B, A
+        JP      EXIT_PROGRAM
+GRAPHICS_EXIT_ERROR:
+        LD      B, EXIT_DLL
+        JP      EXIT_PROGRAM
+
+GRAPHICS_TIMER_RESET:
+        LD      HL, 0
+        LD      (GRAPHICS_MINUTES), HL
+        XOR     A
+        LD      (GRAPHICS_SECONDS), A
+        LD      C, DSS_SYSTIME
+        RST     DSS
+        LD      A, B
+        LD      (GRAPHICS_LAST_SECOND), A
+        JP      GRAPHICS_DRAW_CLOCK
+
+        INCLUDE "graphics_frame.asm"
+        INCLUDE "graphics_timer.asm"
 
 GRAPHICS_CLEAR:
         LD      HL, (GFX_HANDLE)
@@ -470,25 +545,24 @@ GRAPHICS_LOAD_PALETTE:
 
 GRAPHICS_DRAW:
         CALL    GRAPHICS_CLEAR
-        JP      C, .FAIL
+        RET     C
+        CALL    GRAPHICS_DRAW_CONTENT
+        RET     C
+        JP      GRAPHICS_DRAW_CLOCK
+
+GRAPHICS_DRAW_CONTENT:
         CALL    GRAPHICS_PREPARE_DAYS
         CALL    GRAPHICS_DRAW_CURRENT_ICON
-        JP      C, .FAIL
+        RET     C
         CALL    GRAPHICS_DRAW_DAY_ICONS
-        JP      C, .FAIL
+        RET     C
         CALL    GRAPHICS_DRAW_DAY_VALUES
-        JP      C, .FAIL
+        RET     C
         CALL    GRAPHICS_DRAW_HEADER
-        JP      C, .FAIL
+        RET     C
         CALL    GRAPHICS_DRAW_CURRENT_TEXT
-        JP      C, .FAIL
-        CALL    GRAPHICS_DRAW_FOOTER
-        JP      C, .FAIL
-        OR      A
-        RET
-.FAIL:
-        SCF
-        RET
+        RET     C
+        JP      GRAPHICS_DRAW_FOOTER
 
 GRAPHICS_DRAW_HEADER:
         LD      DE, MSG_GRAPHICS_TITLE
@@ -636,13 +710,53 @@ GRAPHICS_DRAW_FOOTER:
         LD      IX, 8
         LD      IY, 224
         LD      A, 0Bh
-        CALL    GRAPHICS_PRINT_BUFFER
+        JP      GRAPHICS_PRINT_BUFFER
+
+; Periodic refresh clears only the forecast data band. The title, clock and
+; bottom status/help rows remain visible while the model is redrawn.
+GRAPHICS_DRAW_REFRESH:
+        LD      HL, (GFX_HANDLE)
+        LD      DE, GRAPHICS_DATA_RECT
+        LD      B, GFX_FILL_RECT
+        CALL    LIBMAN.l_call
         RET     C
-        LD      DE, MSG_GRAPHICS_HINT
-        LD      IX, 8
-        LD      IY, 240
-        LD      A, 07h
+        OR      A
+        JR      NZ, .FAIL
+        JP      GRAPHICS_DRAW_CONTENT
+.FAIL:  SCF
+        RET
+
+; DSS_SYSTIME returns H=hour, L=minute and B=second, all decimal.
+GRAPHICS_DRAW_CLOCK:
+        LD      C, DSS_SYSTIME
+        RST     DSS
+        PUSH    BC
+        LD      DE, CFG_FILE_BUFFER
+        LD      A, H
+        CALL    GRAPHICS_CLOCK_2D
+        LD      A, ':'
+        LD      (DE), A
+        INC     DE
+        LD      A, L
+        CALL    GRAPHICS_CLOCK_2D
+        POP     BC
+        LD      A, ':'
+        LD      (DE), A
+        INC     DE
+        LD      A, B
+        CALL    GRAPHICS_CLOCK_2D
+        XOR     A
+        LD      (DE), A
+        LD      DE, CFG_FILE_BUFFER
+        ; GRAPHICS_CLOCK_2D pads the narrow digit 1 with two blank one-pixel
+        ; glyphs, making HH:MM:SS exactly 42 pixels wide. Leave a two-pixel
+        ; margin at the right edge of the 320-pixel screen.
+        LD      IX, 276
+        LD      IY, 4
+        LD      A, 0Eh
         JP      GRAPHICS_PRINT
+
+        INCLUDE "graphics_clock.asm"
 
 GRAPHICS_PREPARE_DAYS:
         LD      HL, WX1_MODEL + WM_DAYS
@@ -1381,13 +1495,22 @@ GFX_NAME:               DB "GFX320.DLL",0
 AFNT_NAME:              DB "AFNT320.DLL",0
 GRAPHICS_STATUS_RECT:
         DW      0                       ; x
-        DB      80                      ; y
+        DB      240                     ; y
         DW      320                     ; width
-        DW      32                      ; height
+        DW      16                      ; height
         DB      0                       ; black
         DB      GFX_TARGET_BUF0         ; flags/target
         DB      0, 0, 0                 ; reserved
         ASSERT  $ - GRAPHICS_STATUS_RECT = GFX_FILL_RECT_SIZE
+GRAPHICS_DATA_RECT:
+        DW      0
+        DB      16
+        DW      320
+        DW      224
+        DB      0
+        DB      GFX_TARGET_BUF0
+        DB      0, 0, 0
+        ASSERT  $ - GRAPHICS_DATA_RECT = GFX_FILL_RECT_SIZE
 DAY_ICON_X:             DW 8,60,112,164,216,268
 GRAPHICS_MONTH_OFFSETS: DB 0,3,2,5,0,3,5,1,4,6,2,4
 GRAPHICS_WEEKDAY_TABLE:
@@ -1395,5 +1518,6 @@ GRAPHICS_WEEKDAY_TABLE:
         DW      MSG_DAY_THU, MSG_DAY_FRI, MSG_DAY_SAT
 GRAPHICS_HELP_LINES:
         DW      MSG_GRAPHICS_HELP_TITLE, CFG_FILE_BUFFER
-        DW      MSG_GRAPHICS_HELP_AUTHOR, MSG_GRAPHICS_HELP_1
-        DW      MSG_GRAPHICS_HELP_2, MSG_GRAPHICS_HELP_RETURN
+        DW      MSG_GRAPHICS_HELP_AUTO, MSG_GRAPHICS_HELP_RETURN
+        DW      MSG_GRAPHICS_HELP_1, MSG_GRAPHICS_HELP_2
+        DW      MSG_GRAPHICS_HELP_BACK

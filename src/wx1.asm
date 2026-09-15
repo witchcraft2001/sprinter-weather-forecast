@@ -92,7 +92,9 @@ WX1_RESET:
         LD      (WX1_FIELD_COUNT), A
         LD      (WX1_SERVICE_CODE), A
         LD      (WX1_STAGE_MODEL + WM_VALID), A
+        IFNDEF WEATHER_GRAPHICS
         LD      (WX1_MODEL + WM_VALID), A
+        ENDIF
         LD      (WX1_ERROR_LINE), A
         LD      HL, WX1_STAGE_MODEL + WM_DAYS
         LD      (WX1_NEXT_DAY_PTR), HL

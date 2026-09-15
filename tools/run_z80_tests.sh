@@ -67,6 +67,80 @@ rm -f "$config_dump"
 }
 echo "Z80 config harness: OK (LF, CRLF, no-EOL and multiline)"
 
+interval_bin="$build_dir/t_interval.bin"
+interval_dump="$build_dir/t_interval.out"
+sjasmplus --nologo --fullpath -I "$repo_root/src" -I "$repo_root/tests/z80" \
+  --raw="$interval_bin" "$repo_root/tests/z80/t_interval.asm"
+rm -f "$interval_dump"
+"$ticks" -pc 0 -counter 2000000 -output "$interval_dump" "$interval_bin" >/dev/null 2>&1 || true
+[[ -f "$interval_dump" ]] || { echo "FAIL interval harness: no memory dump" >&2; exit 1; }
+[[ "$(byte_at_file "$interval_dump" 57345)" == "165" ]] || {
+  echo "FAIL interval harness: incomplete" >&2
+  exit 1
+}
+[[ "$(byte_at_file "$interval_dump" 57344)" == "0" ]] || {
+  echo "FAIL interval harness: assertion $(byte_at_file "$interval_dump" 57346)," \
+    "failures=$(byte_at_file "$interval_dump" 57347)" >&2
+  exit 1
+}
+echo "Z80 interval harness: OK (default, bounds, spaces and invalid forms)"
+
+timer_bin="$build_dir/t_graphics_timer.bin"
+timer_dump="$build_dir/t_graphics_timer.out"
+sjasmplus --nologo --fullpath -I "$repo_root/src" -I "$repo_root/tests/z80" \
+  --raw="$timer_bin" "$repo_root/tests/z80/t_graphics_timer.asm"
+rm -f "$timer_dump"
+"$ticks" -pc 0 -counter 2000000 -output "$timer_dump" "$timer_bin" >/dev/null 2>&1 || true
+[[ -f "$timer_dump" ]] || { echo "FAIL graphics timer harness: no memory dump" >&2; exit 1; }
+[[ "$(byte_at_file "$timer_dump" 57345)" == "165" ]] || {
+  echo "FAIL graphics timer harness: incomplete" >&2
+  exit 1
+}
+[[ "$(byte_at_file "$timer_dump" 57344)" == "0" ]] || {
+  echo "FAIL graphics timer harness: assertion $(byte_at_file "$timer_dump" 57346)," \
+    "failures=$(byte_at_file "$timer_dump" 57347)" >&2
+  exit 1
+}
+echo "Z80 graphics timer harness: OK (1, 5 and 1440 minute boundaries)"
+
+clock_bin="$build_dir/t_graphics_clock.bin"
+clock_dump="$build_dir/t_graphics_clock.out"
+sjasmplus --nologo --fullpath -I "$repo_root/src" -I "$repo_root/tests/z80" \
+  --raw="$clock_bin" "$repo_root/tests/z80/t_graphics_clock.asm"
+rm -f "$clock_dump"
+"$ticks" -pc 0 -counter 2000000 -output "$clock_dump" "$clock_bin" >/dev/null 2>&1 || true
+[[ -f "$clock_dump" ]] || { echo "FAIL graphics clock harness: no memory dump" >&2; exit 1; }
+[[ "$(byte_at_file "$clock_dump" 57345)" == "165" ]] || {
+  echo "FAIL graphics clock harness: incomplete" >&2
+  exit 1
+}
+[[ "$(byte_at_file "$clock_dump" 57344)" == "0" ]] || {
+  echo "FAIL graphics clock harness: assertion $(byte_at_file "$clock_dump" 57346)," \
+    "failures=$(byte_at_file "$clock_dump" 57347)" >&2
+  exit 1
+}
+echo "Z80 graphics clock harness: OK (formats and DSS wall-clock second gating)"
+
+python3 "$repo_root/tools/test_graphics_runtime.py"
+
+model_bin="$build_dir/t_graphics_model.bin"
+model_dump="$build_dir/t_graphics_model.out"
+sjasmplus --nologo --fullpath -I "$repo_root/src" -I "$repo_root/tests/z80" \
+  --raw="$model_bin" "$repo_root/tests/z80/t_graphics_model.asm"
+rm -f "$model_dump"
+"$ticks" -pc 0 -counter 2000000 -output "$model_dump" "$model_bin" >/dev/null 2>&1 || true
+[[ -f "$model_dump" ]] || { echo "FAIL graphics model harness: no memory dump" >&2; exit 1; }
+[[ "$(byte_at_file "$model_dump" 57345)" == "165" ]] || {
+  echo "FAIL graphics model harness: incomplete" >&2
+  exit 1
+}
+[[ "$(byte_at_file "$model_dump" 57344)" == "0" ]] || {
+  echo "FAIL graphics model harness: assertion $(byte_at_file "$model_dump" 57346)," \
+    "failures=$(byte_at_file "$model_dump" 57347)" >&2
+  exit 1
+}
+echo "Z80 graphics model harness: OK (forecast and shown flag survive retry reset)"
+
 assets="$repo_root/build/generated/weather_assets"
 # Regenerate the streams unconditionally: a stale .hst next to modified .bin
 # artwork would otherwise look like a depacker regression.

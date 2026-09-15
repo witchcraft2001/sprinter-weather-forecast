@@ -11,7 +11,9 @@ DSS_OPEN_FILE           EQU 011h
 DSS_CLOSE_FILE          EQU 012h
 DSS_READ_FILE           EQU 013h
 DSS_MOVE_FP             EQU 015h
+DSS_SYSTIME             EQU 021h
 DSS_WAITKEY             EQU 030h
+DSS_SCANKEY             EQU 031h
 DSS_KCLEAR              EQU 035h
 DSS_SETWIN1             EQU 039h
 DSS_SETWIN3             EQU 03Bh

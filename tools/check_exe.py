@@ -93,6 +93,15 @@ def main() -> int:
                 fail("graphics EXE has no WFG2 loader manifest")
             runtime_size = struct.unpack_from("<H", raw, tail + 10)[0]
             stream_sizes = struct.unpack_from("<5H", raw, tail + 14)
+            runtime = raw[tail + 24 : tail + 24 + runtime_size]
+            # The primary loader patches the refresh interval directly into
+            # the immediate operand at runtime offset 6. Keep both halves of
+            # this tiny handoff ABI tied to the assembled artifacts.
+            if runtime[:6:5] != b"\xf3\x21" or runtime[6:8] != b"\x05\x00":
+                fail("WEATHER.RUNTIME refresh-interval patch point moved")
+            loader = raw[512 : 512 + loader_size]
+            if b"\x22\x06\xc1" not in loader:
+                fail("primary loader does not patch the runtime interval")
             if runtime_size != image_end - image_base:
                 fail("WFG2 runtime size does not match the runtime image")
             if len(raw) != tail + 24 + runtime_size + sum(stream_sizes):

@@ -70,6 +70,11 @@ START:
         LD      SP, STACK_TOP
         IFDEF WEATHER_GRAPHICS
         PUSH    AF                       ; primary loader passes asset block
+        ; The primary loader patches this immediate in WEATHER.RUNTIME before
+        ; changing WIN2. Keep it at byte offset 6 from START; the loader and
+        ; host artifact check both enforce that handoff ABI.
+        LD      HL, 5                    ; loader-patched refresh interval
+        PUSH    HL
         EI
         ENDIF
         CALL    CLEAR_BSS
@@ -77,6 +82,8 @@ START:
         CALL    UNETLD.RESET
 
         IFDEF WEATHER_GRAPHICS
+        POP     HL
+        LD      (GRAPHICS_INTERVAL), HL
         POP     AF
         LD      (ASSET_BLOCK), A
         LD      A, 1
@@ -494,6 +501,7 @@ ERROR_GRAPHICS_BOOT:
         JP      ATTEMPT_FINISH
         ENDIF
 
+        IFNDEF WEATHER_GRAPHICS
 PRINT_CONFIG_HINT:
         LD      HL, MSG_HINT_BACKEND
         JP      PUTS_LN
@@ -526,6 +534,7 @@ PRINT_UNETLD_DIAGNOSTICS:
         LD      A, (LIBMAN.l_init_status)
         CALL    PUT_HEX8
         JP      CRLF
+        ENDIF
 
         INCLUDE "config.asm"
         INCLUDE "wx1.asm"
@@ -560,10 +569,18 @@ ATTEMPT_FINISH:
         LD      (LAST_ATTEMPT_EXIT), A
         CALL    CLEANUP
         IFDEF WEATHER_GRAPHICS
-        CALL    GRAPHICS_RENDER_PROMPT
+        LD      A, (GRAPHICS_MODE_ACTIVE)
+        OR      A
+        JR      NZ, .GRAPHICS_LOOP
+        LD      A, (LAST_ATTEMPT_EXIT)
+        LD      B, A
+        JP      EXIT_PROGRAM
+.GRAPHICS_LOOP:
+        CALL    GRAPHICS_TIMER_RESET
+        JP      C, GRAPHICS_EXIT_ERROR
+        JP      GRAPHICS_EVENT_LOOP
         ELSE
         CALL    TEXT_RENDER_PROMPT
-        ENDIF
 .WAIT:
         LD      C, DSS_KCLEAR
         RST     DSS
@@ -582,6 +599,7 @@ ATTEMPT_FINISH:
         LD      A, (LAST_ATTEMPT_EXIT)
         LD      B, A
         JP      EXIT_PROGRAM
+        ENDIF
 
 EXIT_PROGRAM:
         LD      A, B
@@ -692,10 +710,13 @@ PUT_CHAR:
         POP     AF
         RET
 
+        IFNDEF WEATHER_GRAPHICS
 PUT_HEX16:
         LD      A, D
         CALL    PUT_HEX8
         LD      A, E
+        ENDIF
+
 PUT_HEX8:
         PUSH    AF
         RRCA
@@ -712,6 +733,7 @@ PUT_NIBBLE:
         DAA
         JP      PUT_CHAR
 
+        IFNDEF WEATHER_GRAPHICS
 ; Print up to four final response bytes in stream order. This diagnostics-only
 ; helper makes a malformed or repeated network payload observable without
 ; dumping an unbounded buffer to the text screen.
@@ -743,6 +765,7 @@ PRINT_RESPONSE_TAIL:
         INC     HL
         DJNZ    .LOOP
         RET
+        ENDIF
 
         ; Keep this explicit: WEATHER.EXE is assembled through src/weather.asm
         ; and sjasmplus resolves nested includes from that source directory.
@@ -883,7 +906,8 @@ GRAPHICS_OLD_MODE EQU GRAPHICS_LIBS_LOADED + 1
 GRAPHICS_OLD_SCREEN EQU GRAPHICS_OLD_MODE + 1
 GRAPHICS_MODE_ACTIVE EQU GRAPHICS_OLD_SCREEN + 1
 GRAPHICS_MESSAGE_COLOR EQU GRAPHICS_MODE_ACTIVE + 1
-GRAPHICS_NUMBER EQU GRAPHICS_MESSAGE_COLOR + 1
+GRAPHICS_LAST_MESSAGE EQU GRAPHICS_MESSAGE_COLOR + 1
+GRAPHICS_NUMBER EQU GRAPHICS_LAST_MESSAGE + 2
 ; Longest formatted value is "-100.0 C" plus NUL.
 GRAPHICS_TILE_REFS EQU GRAPHICS_NUMBER + 9
 GRAPHICS_TILE_LEFT EQU GRAPHICS_TILE_REFS + 2
@@ -898,8 +922,16 @@ GRAPHICS_TODAY_MODEL_PTR EQU GRAPHICS_DAY_BASE + 2
 GRAPHICS_BUFFER_PTR EQU GRAPHICS_TODAY_MODEL_PTR + 2
 ; Which GRAPHICS_BEGIN_ATTEMPT step is running.  Every failure there shares one
 ; text-mode message, so the number is the only clue a remote user can report.
-GRAPHICS_INIT_STAGE EQU GRAPHICS_BUFFER_PTR + 2
-BSS_END         EQU GRAPHICS_INIT_STAGE + 1
+; Timer counters reuse WX1 parser scratch: parsing/network work is synchronous,
+; and GRAPHICS_TIMER_RESET re-arms them after every attempt. The stage byte is
+; needed only before networking and can share the same scratch area.
+GRAPHICS_INIT_STAGE EQU WX1_LINE_COUNT
+GRAPHICS_INTERVAL EQU GRAPHICS_BUFFER_PTR + 2
+GRAPHICS_MINUTES EQU WX1_TMP16
+GRAPHICS_SECONDS EQU WX1_STATE
+GRAPHICS_LAST_SECOND EQU WX1_PENDING_CR
+GRAPHICS_SHOWN EQU GRAPHICS_INTERVAL + 2
+BSS_END         EQU GRAPHICS_SHOWN + 1
         ELSE
 BSS_END         EQU LAST_ATTEMPT_EXIT + 1
         ENDIF

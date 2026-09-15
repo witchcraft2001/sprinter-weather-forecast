@@ -17,6 +17,10 @@ WFG_PSP_SIZE             EQU WFG_RUNTIME_OFFSET
 WFG_RUNTIME_CAPACITY     EQU WFG_PAGE_SIZE - WFG_RUNTIME_OFFSET
 WFG_RUNTIME_SIZE         EQU 10
 WFG_STREAM_SIZES         EQU 14
+; WEATHER.RUNTIME starts with DI, LD SP,nn, PUSH AF, LD HL,nn. Patch the
+; immediate word of that LD HL while the freshly loaded runtime is still
+; visible in WIN3. This survives the page switch without relying on BC.
+WFG_RUNTIME_INTERVAL     EQU WFG_RUNTIME_OFFSET + 6
 
         DEVICE  NOSLOT64K
         INCLUDE "dss.inc"
@@ -40,6 +44,16 @@ LOADER_START:
         LD      SP, LOADER_STACK_TOP
         LD      A, (IX - 3)             ; DSS PRELOAD file handle
         LD      (L_FILE_HANDLE), A
+        CALL    L_PARSE_INTERVAL
+        JR      NC, .ARG_OK
+        LD      HL, L_USAGE
+        LD      C, DSS_PCHARS
+        RST     DSS
+        LD      B, 4                    ; EXIT_CONFIG
+        LD      C, DSS_EXIT
+        RST     DSS
+.ARG_OK:
+        LD      (L_INTERVAL), HL
         LD      HL, L_BANNER
         LD      C, DSS_PCHARS
         RST     DSS
@@ -124,6 +138,8 @@ LOADER_START:
         LD      DE, (L_MANIFEST + WFG_RUNTIME_SIZE)
         CALL    L_READ_EXACT
         JP      C, L_FAIL
+        LD      HL, (L_INTERVAL)
+        LD      (0C000h + WFG_RUNTIME_INTERVAL), HL
 
         XOR     A
         LD      (L_PAGE_INDEX), A
@@ -258,7 +274,7 @@ L_FAIL:
         LD      C, DSS_EXIT
         RST     DSS
 
-; This code executes from WIN1 after it replaces WIN2 with the runtime page.
+        ; This code executes from WIN1 after it replaces WIN2 with the runtime page.
 L_TRAMPOLINE:
         LD      A, 0
         OUT     (0C2h), A
@@ -266,9 +282,12 @@ L_TRAMPOLINE:
         JP      08100h
 L_TRAMPOLINE_END:
 
+        INCLUDE "interval.asm"
+
         INCLUDE "hrust_depack.asm"
 
 L_MAGIC:                DB "WFG2"
+L_USAGE:                DB "Usage: WEATHER [minutes]", 13, 10, 0
 L_BANNER:
         DB      "Weather Forecast v.0.1.2 by Dmitry Mikhalchenkov.", 13, 10, 0
 L_FILE_HANDLE:          DB 0FFh
@@ -283,6 +302,8 @@ L_DEST_PAGE:            DB 0
 L_WIN0_PAGE:            DB 0
 L_PAGE_INDEX:           DB 0
 L_EXPECTED:             DW 0
+L_INTERVAL:             DW 5
+L_DIGITS:               DB 0
 L_MANIFEST:             DS WFG_MANIFEST_SIZE, 0
 
 WEATHER_LOADER_SIZE     EQU $ - EXE_LOAD_ADDRESS

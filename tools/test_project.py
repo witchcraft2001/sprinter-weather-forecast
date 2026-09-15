@@ -68,6 +68,9 @@ def check_graphics_sources() -> None:
 def check_source_contract() -> None:
     weather_source = (ROOT / "src" / "weatherc.asm").read_text(encoding="utf-8")
     graphics_ui_source = (ROOT / "src" / "graphics_ui.asm").read_text(encoding="utf-8")
+    graphics_clock_source = (ROOT / "src" / "graphics_clock.asm").read_text(encoding="utf-8")
+    graphics_frame_source = (ROOT / "src" / "graphics_frame.asm").read_text(encoding="utf-8")
+    graphics_timer_source = (ROOT / "src" / "graphics_timer.asm").read_text(encoding="utf-8")
     loader_source = (ROOT / "src" / "weather_loader.asm").read_text(encoding="utf-8")
     message_catalogue = json.loads(
         (ROOT / "resources/messages.json").read_text(encoding="utf-8")
@@ -83,7 +86,13 @@ def check_source_contract() -> None:
     )
     graphics_source = "\n".join(
         (ROOT / "src" / name).read_text(encoding="utf-8")
-        for name in ("weather.asm", "graphics_ui.asm")
+        for name in (
+            "weather.asm",
+            "graphics_ui.asm",
+            "graphics_frame.asm",
+            "graphics_timer.asm",
+            "graphics_clock.asm",
+        )
     )
     source = console_source + "\n" + graphics_source
     setup_start = weather_source.index("        CALL    UNETLD.SELECT")
@@ -142,7 +151,9 @@ def check_source_contract() -> None:
         "DSS_CLOSE_FILE": "012h",
         "DSS_READ_FILE": "013h",
         "DSS_MOVE_FP": "015h",
+        "DSS_SYSTIME": "021h",
         "DSS_WAITKEY": "030h",
+        "DSS_SCANKEY": "031h",
         "DSS_KCLEAR": "035h",
         "DSS_SETWIN1": "039h",
         "DSS_SETWIN3": "03Bh",
@@ -245,6 +256,35 @@ def check_source_contract() -> None:
             encoding="utf-8"
         ),
         "UNETLD backend selection needs its Z80 regression harness",
+    )
+    require(
+        (ROOT / "tests" / "z80" / "t_interval.asm").is_file()
+        and 'INCLUDE "interval.asm"' in loader_source
+        and "Z80 interval harness" in (ROOT / "tools" / "run_z80_tests.sh").read_text(
+            encoding="utf-8"
+        ),
+        "WEATHER refresh interval parsing needs its production Z80 harness",
+    )
+    require(
+        (ROOT / "tests" / "z80" / "t_graphics_timer.asm").is_file()
+        and "Z80 graphics timer harness" in (ROOT / "tools" / "run_z80_tests.sh").read_text(
+            encoding="utf-8"
+        ),
+        "the graphics refresh countdown needs its Z80 regression harness",
+    )
+    require(
+        (ROOT / "tests" / "z80" / "t_graphics_clock.asm").is_file()
+        and "Z80 graphics clock harness" in (ROOT / "tools" / "run_z80_tests.sh").read_text(
+            encoding="utf-8"
+        ),
+        "the HH:MM:SS formatter needs its Z80 regression harness",
+    )
+    require(
+        (ROOT / "tests" / "z80" / "t_graphics_model.asm").is_file()
+        and "Z80 graphics model harness" in (ROOT / "tools" / "run_z80_tests.sh").read_text(
+            encoding="utf-8"
+        ),
+        "retry failures need a Z80 regression harness for forecast retention",
     )
     unetld_harness = (ROOT / "tests" / "z80" / "t_unetld_select.asm").read_text(
         encoding="utf-8"
@@ -367,6 +407,115 @@ def check_source_contract() -> None:
         and "LD      (GRAPHICS_MODE_ACTIVE), A" in graphics_ui_source,
         "graphical errors need a controlled text fallback when GFX/AFNT fails",
     )
+    full_message = graphics_ui_source[
+        graphics_ui_source.index("GRAPHICS_SHOW_MESSAGE:") : graphics_ui_source.index(
+            "; Full-screen help"
+        )
+    ]
+    require(
+        "JP      GRAPHICS_DRAW_CLOCK" in full_message,
+        "full-screen progress and errors must keep the clock visible",
+    )
+    require(
+        "DSS_WAITKEY" not in graphics_ui_source
+        and "DSS_SCANKEY" in graphics_ui_source
+        and "GRAPHICS_EVENT_LOOP:" in graphics_ui_source
+        and "CP      25" not in graphics_frame_source
+        and "GRAPHICS_TIMER_SECOND" in graphics_ui_source
+        and "GRAPHICS_TIMER_RESET:" in graphics_ui_source,
+        "the graphical forecast loop must scan keys and refresh on the wall-clock timer",
+    )
+    event_loop = graphics_ui_source[
+        graphics_ui_source.index("GRAPHICS_EVENT_LOOP:") : graphics_ui_source.index(
+            "GRAPHICS_TIMER_RESET:"
+        )
+    ]
+    require(
+        "CALL    GRAPHICS_FRAME_CLOCK" in event_loop
+        and "CALL    GRAPHICS_DRAW_CLOCK" not in event_loop
+        and "CP      25" not in graphics_frame_source
+        and graphics_frame_source.count("CALL    GRAPHICS_DRAW_CLOCK") == 1,
+        "the clock should sample DSS time after every interrupt wakeup",
+    )
+    require(
+        ".FRAME: EI\n        HALT" in event_loop
+        and "GRAPHICS_IDLE" not in graphics_ui_source,
+        "the graphics loop must use EI/HALT with RTC checks, not busy polling",
+    )
+    require(
+        "GRAPHICS_LAST_SECOND" in graphics_frame_source
+        and "JR      Z, .FRAME" in event_loop,
+        "automatic refresh must advance from DSS wall-clock seconds",
+    )
+    require(
+        "GRAPHICS_DRAW_REFRESH:" in graphics_ui_source
+        and "GRAPHICS_DATA_RECT" in graphics_ui_source
+        and "CALL    GRAPHICS_CLEAR\n" not in graphics_ui_source[
+            graphics_ui_source.index("GRAPHICS_DRAW_REFRESH:") : graphics_ui_source.index(
+                "GRAPHICS_DRAW_CLOCK:"
+            )
+        ],
+        "periodic forecast rendering must clear only the data rectangle",
+    )
+    require(
+        "DSS_SYSTIME" in dss_source
+        and "HH:MM:SS" in (ROOT / "README.md").read_text(encoding="utf-8")
+        and "Usage: WEATHER [minutes]" in loader_source
+        and "WFG_RUNTIME_INTERVAL" in loader_source
+        and "LD      HL, 5                    ; loader-patched refresh interval"
+        in weather_source,
+        "graphics clock and loader interval handoff are missing",
+    )
+    interval_source = (ROOT / "src/interval.asm").read_text(encoding="utf-8")
+    require(
+        "PUSH    IX\n        POP     HL" in interval_source
+        and "LD      HL, 08003h" not in interval_source,
+        "CLI must use DSS entry IX; hardcoded #8003 ignores arguments on classic DSS",
+    )
+    wx1_source = (ROOT / "src" / "wx1.asm").read_text(encoding="utf-8")
+    wx1_commit = wx1_source[
+        wx1_source.index("WX1_PARSE_OK_DOT:") : wx1_source.index(
+            "WX1_PARSE_SERVICE_CODE:"
+        )
+    ]
+    wx1_reset = wx1_source[
+        wx1_source.index("WX1_RESET:") : wx1_source.index("; HL=data, BC=size.")
+    ]
+    require(
+        "LD      HL, WX1_STAGE_MODEL\n        LD      DE, WX1_MODEL\n"
+        "        LD      BC, WM_MODEL_SIZE\n        LDIR" in wx1_commit
+        and "IFNDEF WEATHER_GRAPHICS\n        LD      (WX1_MODEL + WM_VALID), A\n"
+        "        ENDIF" in wx1_reset,
+        "WX1 failures must leave the last committed forecast model untouched",
+    )
+    retry_error_labels = (
+        "ERROR_CONFIG:",
+        "ERROR_CONFIG_FILE:",
+        "ERROR_UNETLD:",
+        "ERROR_TCP_CAP:",
+        "ERROR_CALL:",
+        "ERROR_UNET_STATUS:",
+        "ERROR_NETSTART:",
+        "ERROR_TRANSPORT:",
+        "ERROR_SERVICE:",
+        "ERROR_WX1:",
+        "ERROR_GRAPHICS_RENDER:",
+        "ERROR_GRAPHICS_BOOT:",
+    )
+    retry_error_end = weather_source.index("PRINT_CONFIG_HINT:")
+    for index, label in enumerate(retry_error_labels):
+        start = weather_source.index(label)
+        end = (
+            weather_source.index(retry_error_labels[index + 1])
+            if index + 1 < len(retry_error_labels)
+            else retry_error_end
+        )
+        block = weather_source[start:end]
+        require(
+            "LD      (WX1_MODEL" not in block
+            and "LD      (GRAPHICS_SHOWN)" not in block,
+            f"{label[:-1]} must preserve the committed forecast and shown flag",
+        )
     status_update = graphics_ui_source[
         graphics_ui_source.index("GRAPHICS_SHOW_STATUS:") : graphics_ui_source.index(
             "GRAPHICS_SHOW_ERROR:"
@@ -375,13 +524,31 @@ def check_source_contract() -> None:
     require(
         "CALL    GRAPHICS_CLEAR_STATUS" in status_update
         and "CALL    GRAPHICS_CLEAR\n" not in status_update
+        and "LD      A, (GRAPHICS_SHOWN)" in status_update
+        and "JP      Z, GRAPHICS_SHOW_STATUS_SCREEN" in status_update
         and "GRAPHICS_SHOW_STATUS_SCREEN" in graphics_ui_source,
-        "network progress transitions must redraw only the local status band",
+        "initial progress must reuse the cleared centered line, while refresh "
+        "progress redraws only the local status band",
     )
     require(
         "LD      DE, GRAPHICS_STATUS_RECT\n        LD      B, GFX_FILL_RECT"
         in graphics_ui_source,
         "the local status update must use GFX320 fill-rect acceleration",
+    )
+    footer_source = graphics_ui_source[
+        graphics_ui_source.index("GRAPHICS_DRAW_FOOTER:") : graphics_ui_source.index(
+            "; Periodic refresh"
+        )
+    ]
+    require(
+        "DB      240                     ; y" in graphics_ui_source
+        and "DW      224" in graphics_ui_source[
+            graphics_ui_source.index("GRAPHICS_DATA_RECT:") : graphics_ui_source.index(
+                "DAY_ICON_X:"
+            )
+        ]
+        and "MSG_GRAPHICS_HINT" not in footer_source,
+        "progress, errors and the key hint must share the one bottom status row",
     )
     require(
         ".FAIL_GFX:\n        LD      HL, (GFX_HANDLE)\n        CALL    LIBMAN.l_free"
@@ -448,7 +615,7 @@ def check_source_contract() -> None:
         "MSG_GRAPHICS_BACKEND_PREFIX",
         "GRAPHICS_SHOW_HELP",
         "MSG_GRAPHICS_HELP_VERSION",
-        "MSG_GRAPHICS_HELP_AUTHOR",
+        "MSG_GRAPHICS_HELP_AUTO",
         "MSG_GRAPHICS_HELP_BACKEND_OPEN",
         "MSG_GRAPHICS_HELP_BACKEND_CLOSE",
         "LD      HL, UNETLD.NET_TAG",
@@ -457,19 +624,47 @@ def check_source_contract() -> None:
         require(token in graphics_ui_source, f"final graphical layout is missing: {token}")
     help_source = graphics_ui_source[
         graphics_ui_source.index("GRAPHICS_SHOW_HELP:") : graphics_ui_source.index(
-            "; ATTEMPT_FINISH uses this for errors."
+            "GRAPHICS_WAIT_KEY:"
         )
     ]
     require(
         help_source.count("CALL    GRAPHICS_FADE_OUT") == 2
         and help_source.count("CALL    GRAPHICS_FADE_IN") == 1
-        and "JP      GRAPHICS_FADE_IN" in help_source,
-        "help must fade both into and out of the forecast screen",
+        and "JP      GRAPHICS_FADE_IN" in help_source
+        and "CALL    GRAPHICS_DRAW_CLOCK" in help_source
+        and "LD      HL, (GRAPHICS_LAST_MESSAGE)" in help_source
+        and "CALL    GRAPHICS_SHOW_MESSAGE" in help_source
+        and "CALL    GRAPHICS_PRINT_STATUS" in help_source,
+        "help must pause refresh and restore the exact prior status or error",
+    )
+    wait_key = graphics_ui_source[
+        graphics_ui_source.index("GRAPHICS_WAIT_KEY:") : graphics_ui_source.index(
+            "GRAPHICS_EVENT_LOOP:"
+        )
+    ]
+    require(
+        ".WAIT:  EI\n        HALT" in wait_key,
+        "help must use EI/HALT while updating the clock",
     )
     require(
-        "2:5030/1997.10" in message_catalogue["MSG_GRAPHICS_HELP_AUTHOR"]
-        and "MSG_GRAPHICS_HELP_4" not in message_catalogue,
-        "help must show the FidoNet address and omit the configuration hint",
+        "CALL    GRAPHICS_FRAME_CLOCK" in wait_key
+        and "GRAPHICS_TIMER_SECOND" not in wait_key,
+        "help must keep the clock live while pausing the refresh countdown",
+    )
+    require(
+        "Часы" in message_catalogue["MSG_GRAPHICS_HELP_AUTO"]
+        and "автообновление" in message_catalogue["MSG_GRAPHICS_HELP_AUTO"]
+        and "Сбой" in message_catalogue["MSG_GRAPHICS_HELP_RETURN"]
+        and "клавиша" in message_catalogue["MSG_GRAPHICS_HELP_BACK"]
+        and "1..1440" in message_catalogue["MSG_GRAPHICS_HELP_2"]
+        and "2:5030/1997.10" in distribution_readme,
+        "help must describe the clock, refresh retention and WEATHER N syntax",
+    )
+    require(
+        "LD      IX, 276" in graphics_ui_source
+        and "LD      A, 0FFh" in graphics_clock_source
+        and "CP      '1'" in graphics_clock_source,
+        "the proportional-font clock must have a fixed width at the right edge",
     )
     require(
         "LD      HL, WX1_MODEL + WM_DAYS\n"

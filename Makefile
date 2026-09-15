@@ -21,7 +21,7 @@ deps:
 test: build
 	tools/test.sh
 
-test-z80:
+test-z80: weather
 	tools/run_z80_tests.sh
 
 package: build
